@@ -1,0 +1,8 @@
+[rule.function-length]
+  arguments = [30, 0]  # max lines, max statements (0 = disabled)
+
+[rule.argument-limit]
+  arguments = [5]  # max parameters
+
+[rule.cognitive-complexity]
+  arguments = [15]  # optional: catches complex functions

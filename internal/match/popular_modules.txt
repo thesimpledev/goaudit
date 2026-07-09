@@ -1,0 +1,181 @@
+# Popular Go modules used as the reference corpus for typosquat detection.
+# One module path per line; comments start with #. Major-version suffixes
+# (/v2, and .v2 on gopkg.in) are stripped at load time.
+#
+# A dependency that IS one of these paths is always treated as clean.
+# A dependency that is a near-miss of one of these paths is warned about.
+#
+# Inclusion criteria: the module must be widely depended upon (the kind of
+# name an attacker would imitate) or a well-known legitimate project that
+# shares a name with one. Pull requests adding such modules are welcome —
+# each new entry reduces both missed squats and false positives.
+
+# Official golang.org/x and google.golang.org modules
+golang.org/x/crypto
+golang.org/x/net
+golang.org/x/sys
+golang.org/x/text
+golang.org/x/term
+golang.org/x/time
+golang.org/x/mod
+golang.org/x/tools
+golang.org/x/sync
+golang.org/x/exp
+golang.org/x/oauth2
+golang.org/x/image
+golang.org/x/xerrors
+golang.org/x/vuln
+golang.org/x/arch
+google.golang.org/grpc
+google.golang.org/protobuf
+google.golang.org/api
+google.golang.org/genproto
+github.com/golang/protobuf
+github.com/golang/mock
+github.com/golang/glog
+github.com/golang/snappy
+
+# Testing and assertions
+github.com/stretchr/testify
+github.com/stretchr/objx
+github.com/davecgh/go-spew
+github.com/pmezard/go-difflib
+github.com/google/go-cmp
+
+# Common utility libraries
+github.com/google/uuid
+github.com/gofrs/uuid
+github.com/google/wire
+github.com/google/go-github
+github.com/google/go-querystring
+github.com/googleapis/gax-go
+github.com/pkg/errors
+github.com/mitchellh/mapstructure
+github.com/mitchellh/go-homedir
+github.com/fsnotify/fsnotify
+github.com/dustin/go-humanize
+github.com/samber/lo
+github.com/emirpasic/gods
+github.com/cenkalti/backoff
+github.com/patrickmn/go-cache
+github.com/robfig/cron
+github.com/shopspring/decimal
+github.com/kr/pretty
+github.com/kr/text
+github.com/go-logr/logr
+
+# CLI and configuration
+github.com/spf13/cobra
+github.com/spf13/viper
+github.com/spf13/pflag
+github.com/spf13/afero
+github.com/spf13/cast
+github.com/urfave/cli
+github.com/joho/godotenv
+github.com/kelseyhightower/envconfig
+github.com/caarlos0/env
+github.com/fatih/color
+github.com/mattn/go-isatty
+github.com/mattn/go-colorable
+github.com/mattn/go-runewidth
+github.com/olekukonko/tablewriter
+github.com/charmbracelet/bubbletea
+github.com/charmbracelet/lipgloss
+
+# Logging and observability
+github.com/sirupsen/logrus
+github.com/rs/zerolog
+go.uber.org/zap
+go.uber.org/multierr
+go.uber.org/atomic
+github.com/prometheus/client_golang
+github.com/prometheus/common
+go.opentelemetry.io/otel
+
+# Web frameworks and HTTP
+github.com/gorilla/mux
+github.com/gorilla/websocket
+github.com/coder/websocket
+nhooyr.io/websocket
+github.com/gorilla/handlers
+github.com/gorilla/sessions
+github.com/gin-gonic/gin
+github.com/go-chi/chi
+github.com/labstack/echo
+github.com/gofiber/fiber
+github.com/valyala/fasthttp
+github.com/grpc-ecosystem/grpc-gateway
+
+# Serialization
+gopkg.in/yaml.v2
+gopkg.in/yaml.v3
+sigs.k8s.io/yaml
+github.com/ghodss/yaml
+github.com/BurntSushi/toml
+github.com/pelletier/go-toml
+github.com/json-iterator/go
+github.com/tidwall/gjson
+github.com/tidwall/sjson
+github.com/tidwall/pretty
+github.com/tidwall/match
+github.com/buger/jsonparser
+github.com/niemeyer/pretty
+
+# Ubiquitous gRPC/xDS plumbing
+github.com/cncf/udpa/go
+github.com/cncf/xds/go
+
+# Auth and crypto
+github.com/golang-jwt/jwt
+github.com/dgrijalva/jwt-go
+
+# Databases and messaging
+github.com/jackc/pgx
+github.com/lib/pq
+github.com/go-sql-driver/mysql
+github.com/mattn/go-sqlite3
+gorm.io/gorm
+go.mongodb.org/mongo-driver
+github.com/redis/go-redis
+github.com/go-redis/redis
+github.com/segmentio/kafka-go
+github.com/nats-io/nats.go
+
+# Cloud SDKs
+github.com/aws/aws-sdk-go
+github.com/aws/aws-sdk-go-v2
+github.com/aws/smithy-go
+cloud.google.com/go
+github.com/Azure/azure-sdk-for-go
+
+# HashiCorp
+github.com/hashicorp/hcl
+github.com/hashicorp/go-multierror
+github.com/hashicorp/go-hclog
+github.com/hashicorp/go-version
+github.com/hashicorp/go-retryablehttp
+
+# Kubernetes and containers
+k8s.io/api
+k8s.io/apimachinery
+k8s.io/client-go
+k8s.io/klog
+github.com/docker/docker
+
+# Networking, compression, hashing
+github.com/miekg/dns
+github.com/klauspost/compress
+github.com/pierrec/lz4
+github.com/andybalholm/brotli
+github.com/cespare/xxhash
+
+# Validation and scraping
+github.com/go-playground/validator
+github.com/asaskevich/govalidator
+github.com/microcosm-cc/bluemonday
+github.com/PuerkitoBio/goquery
+github.com/gocolly/colly
+github.com/chromedp/chromedp
+
+# Scientific
+gonum.org/v1/gonum

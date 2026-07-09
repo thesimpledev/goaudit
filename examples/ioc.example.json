@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "updated": "2026-07-09",
+  "entries": [
+    {
+      "module": "github.com/example-attacker/totally-legit-logging",
+      "versions": ["v1.0.2", "v1.0.3"],
+      "campaign": "PolinRider",
+      "reason": "installs a credential stealer from an init() function"
+    },
+    {
+      "module": "github.com/example-attacker/fasthttp-mirror",
+      "campaign": "PolinRider",
+      "reason": "typosquat repository; every published version is malicious"
+    }
+  ],
+  "allow": [
+    "github.com/gofrs/uuid"
+  ]
+}
