@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -138,6 +139,50 @@ func TestRunGofmtAndVet(t *testing.T) {
 	}
 	if len(issues) != 1 || issues[0].Tool != "gofmt" {
 		t.Fatalf("issues = %+v, want exactly the gofmt finding", issues)
+	}
+}
+
+// TestRunChecksBuildablePackagesOnly proves a package that cannot build
+// on this platform is skipped with a note while the rest of the module is
+// still checked: the buildable package carries a real vet error that must
+// surface even though ./... as a whole cannot compile.
+func TestRunChecksBuildablePackagesOnly(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, content string) {
+		t.Helper()
+		path := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	foreign := "windows"
+	if runtime.GOOS == "windows" {
+		foreign = "linux"
+	}
+	write("go.mod", "module example.test/fixture\n\ngo 1.23\n")
+	write("lib.go", "package fixture\n\nimport \"fmt\"\n\nfunc bad() string { return fmt.Sprintf(\"%d\", \"not a number\") }\n")
+	// foreign fails at import loading: its sole import has no files on
+	// this platform, the same shape as importing golang.org/x/sys/windows
+	// when audited on Linux.
+	write("platform/impl.go", "//go:build "+foreign+"\n\npackage platform\n")
+	write("foreign/foreign.go", "package foreign\n\nimport _ \"example.test/fixture/platform\"\n")
+	// stub loads cleanly but fails to compile: the symbol it uses exists
+	// only behind the other platform's build tag, the same shape as
+	// Windows-only syscall.SysProcAttr fields.
+	write("stub/stub.go", "package stub\n\nfunc Name() string { return platformName }\n")
+	write("stub/impl.go", "//go:build "+foreign+"\n\npackage stub\n\nconst platformName = \""+foreign+"\"\n")
+
+	tools := []Tool{{Name: "vet", Args: []string{"go", "vet", "./..."}, Parse: lineParser("vet", false)}}
+	issues, notes := Run(context.Background(), dir, tools)
+	if len(notes) != 1 || !strings.Contains(notes[0], "2 of 3") ||
+		!strings.Contains(notes[0], "foreign") || !strings.Contains(notes[0], "stub") {
+		t.Errorf("notes = %v, want one note naming both skipped packages", notes)
+	}
+	if len(issues) == 0 || issues[0].Tool != "vet" {
+		t.Fatalf("issues = %+v, want the vet finding from the buildable package", issues)
 	}
 }
 

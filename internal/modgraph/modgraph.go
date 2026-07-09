@@ -75,7 +75,10 @@ func List(ctx context.Context, dir string) ([]Module, error) {
 
 // listGraph runs `go list -m all` once, including the main module (marked
 // Main). Vendored projects are listed with -mod=mod because the graph
-// cannot be resolved from a vendor directory.
+// cannot be resolved from a vendor directory; -mod=mod also lets the go
+// tool rewrite go.mod and go.sum while resolving, so both files are
+// snapshotted and put back — an audit must never modify the project it
+// scans.
 func listGraph(ctx context.Context, dir string) ([]Module, error) {
 	dir = filepath.Clean(dir)
 	if _, err := os.Stat(filepath.Join(dir, "go.mod")); err != nil {
@@ -84,6 +87,11 @@ func listGraph(ctx context.Context, dir string) ([]Module, error) {
 
 	var cmd *exec.Cmd
 	if vendored(dir) {
+		restore, err := preserve(filepath.Join(dir, "go.mod"), filepath.Join(dir, "go.sum"))
+		if err != nil {
+			return nil, err
+		}
+		defer restore()
 		cmd = exec.CommandContext(ctx, "go", "list", "-mod=mod", "-m", "-json", "all")
 	} else {
 		cmd = exec.CommandContext(ctx, "go", "list", "-m", "-json", "all")
@@ -106,6 +114,62 @@ func listGraph(ctx context.Context, dir string) ([]Module, error) {
 func vendored(dir string) bool {
 	_, err := os.Stat(filepath.Join(dir, "vendor", "modules.txt"))
 	return err == nil
+}
+
+// snapshot holds one file's contents from before the go tool ran, so any
+// rewrite can be undone. existed false means the file was absent.
+type snapshot struct {
+	path    string
+	data    []byte
+	mode    os.FileMode
+	existed bool
+}
+
+// preserve snapshots the named files and returns a function that puts the
+// original contents back, undoing any rewrite the go tool made.
+func preserve(paths ...string) (restore func(), err error) {
+	var snaps []snapshot
+	for _, path := range paths {
+		snap, err := takeSnapshot(path)
+		if err != nil {
+			return nil, err
+		}
+		snaps = append(snaps, snap)
+	}
+	return func() {
+		for _, snap := range snaps {
+			snap.restore()
+		}
+	}, nil
+}
+
+func takeSnapshot(path string) (snapshot, error) {
+	info, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return snapshot{path: path}, nil
+	}
+	if err != nil {
+		return snapshot{}, err
+	}
+	data, err := os.ReadFile(path) // #nosec G304 -- path is go.mod/go.sum inside the scanned project
+	if err != nil {
+		return snapshot{}, err
+	}
+	return snapshot{path: path, data: data, mode: info.Mode(), existed: true}, nil
+}
+
+// restore puts the snapshotted contents back; a file absent at snapshot
+// time is deleted again if the tool created it. Failures are ignored
+// because the graph result still stands.
+func (s snapshot) restore() {
+	if !s.existed {
+		_ = os.Remove(s.path)
+		return
+	}
+	if current, err := os.ReadFile(s.path); err == nil && bytes.Equal(current, s.data) { // #nosec G304 -- same path as above
+		return
+	}
+	_ = os.WriteFile(s.path, s.data, s.mode) // #nosec G306 -- restoring the file's original mode
 }
 
 // parse decodes the stream of JSON objects that `go list -m -json` emits.

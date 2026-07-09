@@ -76,6 +76,42 @@ func TestIsTransient(t *testing.T) {
 	}
 }
 
+// TestPreserve proves the go.mod/go.sum snapshot survives the two ways
+// `go list -mod=mod` can dirty a project: rewriting an existing file and
+// creating one that was not there.
+func TestPreserve(t *testing.T) {
+	dir := t.TempDir()
+	gomod := filepath.Join(dir, "go.mod")
+	gosum := filepath.Join(dir, "go.sum")
+	original := []byte("module example.test\n\ngo 1.23\n")
+	if err := os.WriteFile(gomod, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	restore, err := preserve(gomod, gosum)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(gomod, []byte("rewritten by the go tool\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(gosum, []byte("example.com/dep v1.0.0/go.mod h1:xxx\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	restore()
+
+	got, err := os.ReadFile(gomod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(original) {
+		t.Errorf("go.mod = %q, want original contents restored", got)
+	}
+	if _, err := os.Stat(gosum); !os.IsNotExist(err) {
+		t.Errorf("go.sum should have been deleted again, stat err = %v", err)
+	}
+}
+
 func TestListMissingGoMod(t *testing.T) {
 	if _, err := List(context.Background(), t.TempDir()); err == nil {
 		t.Fatal("expected an error for a directory without go.mod")

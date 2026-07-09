@@ -78,31 +78,72 @@ func fileExists(path string) bool {
 }
 
 // Run executes each tool in dir, returning the trimmed issue list plus
-// notes about anything skipped.
+// notes about anything skipped. Packages that do not build on this
+// platform (e.g. Windows-only code audited on Linux) are left out of the
+// package-pattern tools and reported in a note, so the rest of the module
+// is still checked.
 func Run(ctx context.Context, dir string, tools []Tool) ([]Issue, []string) {
-	if !hasPackages(ctx, dir) {
+	pkgs, broken := listPackages(ctx, dir)
+	if len(pkgs) == 0 && len(broken) == 0 {
 		return nil, []string{"no Go packages; code checks skipped"}
 	}
-	var issues []Issue
 	var notes []string
+	if len(broken) > 0 {
+		notes = append(notes, fmt.Sprintf("%d of %d packages do not build on this platform; skipped: %s",
+			len(broken), len(broken)+len(pkgs), strings.Join(broken, ", ")))
+	}
+	if len(pkgs) == 0 {
+		return nil, append(notes, "no packages build on this platform; code checks skipped")
+	}
+	var issues []Issue
 	for _, tool := range tools {
-		if tool.Resolve != nil {
-			args, note := tool.Resolve(dir)
-			if len(args) == 0 {
-				if note != "" {
-					notes = append(notes, note)
-				}
-				continue
+		args, note := resolveTool(dir, tool, pkgs, len(broken) > 0)
+		if len(args) == 0 {
+			if note != "" {
+				notes = append(notes, note)
 			}
-			tool.Args = args
-		}
-		if _, err := exec.LookPath(tool.Args[0]); err != nil {
-			notes = append(notes, tool.Name+" not installed; skipped")
 			continue
 		}
+		tool.Args = args
 		issues = append(issues, capIssues(runTool(ctx, dir, tool), tool.Name)...)
 	}
 	return issues, notes
+}
+
+// resolveTool finalizes a tool's argv for dir. Empty args means the tool
+// is skipped, with note saying why (an empty note means the Resolve hook
+// declined silently).
+func resolveTool(dir string, tool Tool, pkgs []string, expand bool) (args []string, note string) {
+	args = tool.Args
+	if tool.Resolve != nil {
+		args, note = tool.Resolve(dir)
+		if len(args) == 0 {
+			return nil, note
+		}
+	}
+	if _, err := exec.LookPath(args[0]); err != nil {
+		return nil, tool.Name + " not installed; skipped"
+	}
+	if expand {
+		args = expandPattern(args, pkgs)
+	}
+	return args, ""
+}
+
+// expandPattern swaps the ./... pattern in a tool's argv for the explicit
+// list of buildable packages, so tools never trip over packages that
+// cannot compile on this platform. Tools without the pattern (gofmt works
+// on files, not packages) are left alone.
+func expandPattern(args, pkgs []string) []string {
+	var out []string
+	for _, arg := range args {
+		if arg == "./..." {
+			out = append(out, pkgs...)
+			continue
+		}
+		out = append(out, arg)
+	}
+	return out
 }
 
 func runTool(ctx context.Context, dir string, tool Tool) []Issue {
@@ -122,14 +163,36 @@ func runTool(ctx context.Context, dir string, tool Tool) []Issue {
 	return tool.Parse(dir, stdout.Bytes(), stderr.Bytes(), exitCode)
 }
 
-// hasPackages reports whether the project contains any Go packages;
-// module-only directories (e.g. a Hugo theme with a bare go.mod) have
+// listPackages splits the project's packages into those that compile on
+// this platform (pkgs) and those that cannot (broken), such as
+// Windows-only code audited on Linux. Both lists empty means a
+// module-only directory (e.g. a Hugo theme with a bare go.mod) with
 // nothing for the code checks to run on.
-func hasPackages(ctx context.Context, dir string) bool {
-	cmd := exec.CommandContext(ctx, "go", "list", "./...")
+//
+// -export forces a real compile into the build cache (nothing is written
+// to the project), so this catches type errors like Windows-only syscall
+// fields, which a plain load would miss: Export stays empty for any
+// package that fails to build. -e keeps the exit code 0 so one broken
+// package cannot hide the rest.
+func listPackages(ctx context.Context, dir string) (pkgs, broken []string) {
+	cmd := exec.CommandContext(ctx, "go", "list", "-e", "-export", "-f", "{{.ImportPath}} {{if .Export}}ok{{else}}broken{{end}}", "./...")
 	cmd.Dir = dir
 	out, err := cmd.Output()
-	return err == nil && len(bytes.TrimSpace(out)) > 0
+	if err != nil {
+		return nil, nil
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+		if fields[1] == "broken" {
+			broken = append(broken, fields[0])
+		} else {
+			pkgs = append(pkgs, fields[0])
+		}
+	}
+	return pkgs, broken
 }
 
 func capIssues(issues []Issue, tool string) []Issue {
