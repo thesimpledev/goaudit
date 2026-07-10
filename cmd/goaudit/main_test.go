@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/zip"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -22,8 +23,9 @@ func writeFile(t *testing.T, path, content string) {
 	}
 }
 
-// fakeFeed points the run at a local feed server and an isolated cache so
-// tests never touch the real network or the user's cache.
+// fakeFeed points the run at a local feed server and an isolated data dir
+// so tests never touch the real network or the user's feed data. The OSV
+// feed is disabled; use fakeOSVFeed to serve one.
 func fakeFeed(t *testing.T, body string) {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -31,10 +33,44 @@ func fakeFeed(t *testing.T, body string) {
 	}))
 	t.Cleanup(srv.Close)
 	t.Setenv("GOAUDIT_FEED_URL", srv.URL)
-	t.Setenv("GOAUDIT_CACHE_DIR", filepath.Join(t.TempDir(), "cache"))
+	t.Setenv("GOAUDIT_OSV_FEED_URL", feedOff)
+	t.Setenv("GOAUDIT_DATA_DIR", filepath.Join(t.TempDir(), "data"))
 	// The external tool suite is exercised by the checks package tests;
 	// running it here would make every end-to-end test minutes long.
 	t.Setenv("GOAUDIT_SKIP_CHECKS", "1")
+}
+
+// makeOSVZip builds an OSV ecosystem export archive holding the given
+// name→content members.
+func makeOSVZip(t *testing.T, files map[string]string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	for name, content := range files {
+		f, err := w.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.Write([]byte(content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// fakeOSVFeed serves an OSV export zip on a local server and points the OSV
+// feed at it. Call after fakeFeed, which sets the isolated data dir.
+func fakeOSVFeed(t *testing.T, files map[string]string) {
+	t.Helper()
+	body := makeOSVZip(t, files)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("GOAUDIT_OSV_FEED_URL", srv.URL)
 }
 
 const emptyFeed = `{"entries":[]}`
@@ -155,8 +191,11 @@ func TestFeedSocketCSVFlagsModule(t *testing.T) {
 	if code != exitFlagged {
 		t.Fatalf("exit = %d, want %d\nstdout: %s\nstderr: %s", code, exitFlagged, out.String(), errOut.String())
 	}
-	if !strings.Contains(out.String(), "feed refreshed: 1 Go entries") {
+	if !strings.Contains(out.String(), "Socket PolinRider feed refreshed: 1 Go entries") {
 		t.Errorf("feed note missing:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "OSV malicious-package feed disabled") {
+		t.Errorf("disabled OSV feed note missing:\n%s", out.String())
 	}
 }
 
@@ -183,7 +222,8 @@ func TestFeedCachedCopyUsedWhenFresh(t *testing.T) {
 
 func TestFeedDownWarnsAndContinues(t *testing.T) {
 	t.Setenv("GOAUDIT_FEED_URL", "http://127.0.0.1:1/feed.csv")
-	t.Setenv("GOAUDIT_CACHE_DIR", filepath.Join(t.TempDir(), "cache"))
+	t.Setenv("GOAUDIT_OSV_FEED_URL", feedOff)
+	t.Setenv("GOAUDIT_DATA_DIR", filepath.Join(t.TempDir(), "data"))
 	t.Setenv("GOAUDIT_SKIP_CHECKS", "1")
 	proj := setupVictim(t, "example.org/harmless/dep")
 
@@ -192,8 +232,68 @@ func TestFeedDownWarnsAndContinues(t *testing.T) {
 	if code != exitClean {
 		t.Fatalf("exit = %d, want %d — a broken feed must not fail the scan\nstderr: %s", code, exitClean, errOut.String())
 	}
-	if !strings.Contains(out.String(), "WARNING: feed download failed") {
+	if !strings.Contains(out.String(), "WARNING: Socket PolinRider feed download failed") {
 		t.Errorf("missing feed failure warning:\n%s", out.String())
+	}
+}
+
+const testMALRecord = `{
+  "id": "MAL-2026-3628",
+  "summary": "Malicious code in github.com/evil/badpkg (Go)",
+  "affected": [{
+    "package": {"name": "github.com/evil/badpkg", "ecosystem": "Go"},
+    "ranges": [{"type": "SEMVER", "events": [{"introduced": "0"}]}]
+  }]
+}`
+
+func TestFeedOSVFlagsModule(t *testing.T) {
+	fakeFeed(t, emptyFeed)
+	fakeOSVFeed(t, map[string]string{
+		"MAL-2026-3628.json": testMALRecord,
+		"GO-2026-0001.json":  `{"id":"GO-2026-0001","summary":"a vulnerability, not malware"}`,
+	})
+	proj := setupVictim(t, "github.com/evil/badpkg")
+
+	var out, errOut bytes.Buffer
+	code := run([]string{"--path", proj}, &out, &errOut)
+	if code != exitFlagged {
+		t.Fatalf("exit = %d, want %d\nstdout: %s\nstderr: %s", code, exitFlagged, out.String(), errOut.String())
+	}
+	if !strings.Contains(out.String(), "MAL-2026-3628") {
+		t.Errorf("finding should cite the MAL record:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "OSV malicious-package feed refreshed: 1 Go entries") {
+		t.Errorf("OSV feed note missing (the GO- record must not be counted):\n%s", out.String())
+	}
+}
+
+func TestOneFeedDownOtherStillLoads(t *testing.T) {
+	fakeFeed(t, emptyFeed)
+	t.Setenv("GOAUDIT_FEED_URL", "http://127.0.0.1:1/feed.csv") // Socket unreachable
+	fakeOSVFeed(t, map[string]string{"MAL-2026-3628.json": testMALRecord})
+	proj := setupVictim(t, "github.com/evil/badpkg")
+
+	var out, errOut bytes.Buffer
+	code := run([]string{"--path", proj}, &out, &errOut)
+	if code != exitFlagged {
+		t.Fatalf("exit = %d, want %d — the OSV feed alone must still flag\nstdout: %s", code, exitFlagged, out.String())
+	}
+	if !strings.Contains(out.String(), "WARNING: Socket PolinRider feed download failed") {
+		t.Errorf("missing Socket failure warning:\n%s", out.String())
+	}
+}
+
+func TestOSVFeedDisabled(t *testing.T) {
+	fakeFeed(t, emptyFeed) // sets GOAUDIT_OSV_FEED_URL=off
+	proj := setupVictim(t, "example.org/harmless/dep")
+
+	var out, errOut bytes.Buffer
+	code := run([]string{"--path", proj}, &out, &errOut)
+	if code != exitClean {
+		t.Fatalf("exit = %d, want %d\nstderr: %s", code, exitClean, errOut.String())
+	}
+	if !strings.Contains(out.String(), "OSV malicious-package feed disabled") {
+		t.Errorf("disabled note missing:\n%s", out.String())
 	}
 }
 
@@ -402,5 +502,49 @@ func TestRunMultiJSONReport(t *testing.T) {
 	}
 	if rep.Projects[0].Name != "testowner/badproj" || rep.Projects[0].Flagged != 1 {
 		t.Errorf("project wrong: %+v", rep.Projects[0])
+	}
+}
+
+func TestParseSkipChecks(t *testing.T) {
+	tests := []struct {
+		value   string
+		skipAll bool
+		skip    []string
+	}{
+		{"", false, nil},
+		{"1", true, nil},
+		{"true", true, nil},
+		{"yes", true, nil},
+		{"capslock", false, []string{"capslock"}},
+		{"test,capslock", false, []string{"test", "capslock"}},
+		{"capslock,bogus", true, nil},
+		{" Capslock ", false, []string{"capslock"}},
+	}
+	for _, tt := range tests {
+		skipAll, skip := parseSkipChecks(tt.value)
+		if skipAll != tt.skipAll {
+			t.Errorf("parseSkipChecks(%q) skipAll = %v, want %v", tt.value, skipAll, tt.skipAll)
+			continue
+		}
+		for _, name := range tt.skip {
+			if !skip[name] {
+				t.Errorf("parseSkipChecks(%q) should skip %q, got %v", tt.value, name, skip)
+			}
+		}
+		if len(skip) != len(tt.skip) {
+			t.Errorf("parseSkipChecks(%q) skip = %v, want %v", tt.value, skip, tt.skip)
+		}
+	}
+}
+
+func TestUpdateBaselinesFlag(t *testing.T) {
+	var errOut bytes.Buffer
+	opts, _, ok := parseFlags([]string{"--update-baselines", "--path", "x"}, &errOut)
+	if !ok || !opts.updateBaselines {
+		t.Errorf("flag not parsed: %+v (%s)", opts, errOut.String())
+	}
+	opts, _, ok = parseFlags([]string{"--path", "x"}, &errOut)
+	if !ok || opts.updateBaselines {
+		t.Errorf("flag should default to false: %+v", opts)
 	}
 }

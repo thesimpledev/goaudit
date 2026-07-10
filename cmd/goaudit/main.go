@@ -2,9 +2,11 @@
 // known-malicious module lists (IOCs) and typosquat heuristics, for use
 // locally or as a CI gate.
 //
-// The threat feed (Socket's PolinRider campaign list) is built in and
-// refreshed automatically whenever the cached copy is older than 24 hours.
-// Feed problems never abort a scan; they surface as warnings in the report.
+// Two threat feeds are built in and refreshed automatically whenever the
+// cached copy is older than 24 hours: Socket's PolinRider campaign list and
+// the OpenSSF malicious-packages database (the MAL- records of OSV.dev's Go
+// ecosystem export). Feed problems never abort a scan; they surface as
+// warnings in the report.
 //
 // Every run writes both formats: the text report to stdout and a JSON
 // report file into the scanned directory.
@@ -15,6 +17,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -22,6 +25,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/thesimpledev/goaudit/internal/checks"
@@ -42,8 +46,18 @@ const (
 
 // defaultFeedURL is Socket's public CSV of packages in the PolinRider
 // supply chain attack campaign. Overridable via GOAUDIT_FEED_URL (used by
-// tests and useful if the endpoint ever moves).
+// tests and useful if the endpoint ever moves); the value "off" disables
+// the feed.
 const defaultFeedURL = "https://socket.dev/api/public/supply-chain-attacks/polinrider/packages.csv"
+
+// defaultOSVFeedURL is OSV.dev's bulk export of the Go ecosystem. Only its
+// MAL- members (the OpenSSF malicious-packages reports) are used; the
+// vulnerability records are govulncheck's job. Overridable via
+// GOAUDIT_OSV_FEED_URL; the value "off" disables the feed.
+const defaultOSVFeedURL = "https://storage.googleapis.com/osv-vulnerabilities/Go/all.zip"
+
+// feedOff is the env value that disables a feed.
+const feedOff = "off"
 
 // cacheTTL is how long a downloaded feed stays fresh before the next run
 // re-downloads it.
@@ -57,11 +71,12 @@ const jsonReportName = "goaudit-report.json"
 const localIOCName = ".goaudit-ioc.json"
 
 type options struct {
-	path       string
-	localIOC   string
-	recursive  bool
-	failOnWarn bool
-	verbose    bool
+	path            string
+	localIOC        string
+	recursive       bool
+	failOnWarn      bool
+	verbose         bool
+	updateBaselines bool
 }
 
 func main() {
@@ -101,6 +116,7 @@ func parseFlags(argv []string, stderr io.Writer) (opts options, code int, ok boo
 	fs.BoolVar(&opts.recursive, "recursive", false, "scan every Go project found under --path (automatic when --path has no go.mod)")
 	fs.BoolVar(&opts.failOnWarn, "fail-on-warn", false, "exit 2 when warnings are found")
 	fs.BoolVar(&opts.verbose, "verbose", false, "include clean modules in the report")
+	fs.BoolVar(&opts.updateBaselines, "update-baselines", false, "re-record each project's capslock capability baseline, accepting its current capabilities")
 	if err := fs.Parse(argv); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return opts, exitClean, false
@@ -110,14 +126,23 @@ func parseFlags(argv []string, stderr io.Writer) (opts options, code int, ok boo
 	return opts, exitClean, true
 }
 
+// feedSpec describes one built-in threat feed: where it lives, how its
+// cache files are named, and how its payload becomes IOC entries.
+type feedSpec struct {
+	name  string // human label; prefixes every note about this feed
+	key   string // cache file key; "" keeps the legacy feed.data names
+	url   string
+	parse func(data []byte, source string) (*ioc.Set, error)
+}
+
 // app holds everything one invocation needs, so the command's stages stay
 // small.
 type app struct {
 	opts       options
 	projectDir string
-	feedURL    string
+	feeds      []feedSpec
 	client     *feed.Client
-	cache      *feed.Cache
+	dataDir    string
 	stdout     io.Writer
 	stderr     io.Writer
 	prog       *progress
@@ -128,27 +153,56 @@ func newApp(opts options, stdout, stderr io.Writer) (*app, error) {
 	if err != nil {
 		return nil, err
 	}
-	cacheDir := os.Getenv("GOAUDIT_CACHE_DIR")
-	if cacheDir == "" {
-		cacheDir, err = feed.DefaultDir()
+	dataDir := os.Getenv("GOAUDIT_DATA_DIR")
+	if dataDir == "" {
+		dataDir = os.Getenv("GOAUDIT_CACHE_DIR") // deprecated name, still honored
+	}
+	if dataDir == "" {
+		dataDir, err = feed.DefaultDir()
 		if err != nil {
 			return nil, err
 		}
 	}
-	feedURL := os.Getenv("GOAUDIT_FEED_URL")
-	if feedURL == "" {
-		feedURL = defaultFeedURL
-	}
 	return &app{
 		opts:       opts,
 		projectDir: projectDir,
-		feedURL:    feedURL,
+		feeds:      builtinFeeds(),
 		client:     &feed.Client{},
-		cache:      &feed.Cache{Dir: cacheDir},
+		dataDir:    dataDir,
 		stdout:     stdout,
 		stderr:     stderr,
 		prog:       newProgress(stderr),
 	}, nil
+}
+
+// builtinFeeds returns the feed list with env overrides applied.
+func builtinFeeds() []feedSpec {
+	socketURL := os.Getenv("GOAUDIT_FEED_URL")
+	if socketURL == "" {
+		socketURL = defaultFeedURL
+	}
+	osvURL := os.Getenv("GOAUDIT_OSV_FEED_URL")
+	if osvURL == "" {
+		osvURL = defaultOSVFeedURL
+	}
+	return []feedSpec{
+		{name: "Socket PolinRider feed", key: "", url: socketURL, parse: ioc.Parse},
+		{name: "OSV malicious-package feed", key: "osv", url: osvURL, parse: parseOSVZip},
+	}
+}
+
+// parseOSVZip loads an OSV ecosystem export archive, keeping only the MAL-
+// records (the OpenSSF malicious-packages reports). The thousands of
+// vulnerability records in the same archive are skipped without being
+// decompressed — govulncheck covers those.
+func parseOSVZip(data []byte, source string) (*ioc.Set, error) {
+	members, err := feed.ExtractZipMembers(data, "MAL-", ".json")
+	if err != nil {
+		return nil, err
+	}
+	batch := append([]byte{'['}, bytes.Join(members, []byte{','})...)
+	batch = append(batch, ']')
+	return ioc.ParseOSV(batch, source)
 }
 
 // fail reports an operational error and returns the matching exit code.
@@ -181,7 +235,7 @@ func (a *app) scan(ctx context.Context) int {
 	}
 
 	findings, _ := buildFindings(mods, match.NewEngine(set))
-	issues, checkNotes := runChecks(ctx, a.projectDir)
+	issues, checkNotes := a.runChecks(ctx, a.projectDir)
 	notes = append(notes, checkNotes...)
 	rep := report.New(a.projectDir, set.Len(), notes, findings, issues)
 	a.prog.finish()
@@ -211,14 +265,55 @@ func exitFor(flagged, security, soft int, failOnWarn bool) int {
 	}
 }
 
-// runChecks executes the standard tool suite (vet, staticcheck, errcheck,
-// revive, gosec, govulncheck, go test, gofmt -l) against one project.
-// GOAUDIT_SKIP_CHECKS disables it (used by tests).
-func runChecks(ctx context.Context, dir string) ([]checks.Issue, []string) {
-	if os.Getenv("GOAUDIT_SKIP_CHECKS") != "" {
+// runChecks executes the tool suite (vet, staticcheck, errcheck, revive,
+// gosec, govulncheck, go test, gofmt -l, capslock) against one project.
+// GOAUDIT_SKIP_CHECKS names checks to skip, or disables the whole suite.
+func (a *app) runChecks(ctx context.Context, dir string) ([]checks.Issue, []string) {
+	skipAll, skip := parseSkipChecks(os.Getenv("GOAUDIT_SKIP_CHECKS"))
+	if skipAll {
 		return nil, nil
 	}
-	return checks.Run(ctx, dir, checks.DefaultTools())
+	var tools []checks.Tool
+	for _, t := range checks.DefaultTools() {
+		if !skip[t.Name] {
+			tools = append(tools, t)
+		}
+	}
+	issues, notes := checks.Run(ctx, dir, tools)
+	if !skip["capslock"] {
+		capsIssues, capsNotes := checks.Capslock(ctx, dir, a.opts.updateBaselines)
+		issues = append(issues, capsIssues...)
+		notes = append(notes, capsNotes...)
+	}
+	return issues, notes
+}
+
+// parseSkipChecks interprets GOAUDIT_SKIP_CHECKS: empty runs everything; a
+// comma-separated list of known check names skips just those (for example
+// "capslock" or "test,capslock"); any unknown token — including the
+// traditional "1" — skips the whole suite, preserving the original
+// any-non-empty-value behavior.
+func parseSkipChecks(value string) (skipAll bool, skip map[string]bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false, nil
+	}
+	known := map[string]bool{"capslock": true}
+	for _, t := range checks.DefaultTools() {
+		known[t.Name] = true
+	}
+	skip = make(map[string]bool)
+	for _, tok := range strings.Split(value, ",") {
+		tok = strings.ToLower(strings.TrimSpace(tok))
+		if tok == "" {
+			continue
+		}
+		if !known[tok] {
+			return true, nil
+		}
+		skip[tok] = true
+	}
+	return false, skip
 }
 
 // writeReports emits both formats every run: text to stdout and JSON to a
@@ -266,12 +361,18 @@ func buildFindings(mods []modgraph.Module, engine *match.Engine) ([]match.Findin
 }
 
 // loadBaseIOCs loads the IOC sources shared by every project in the run:
-// the built-in feed plus the explicit --local-ioc file. Feed problems are
-// returned as warning notes, never as errors.
+// the built-in feeds plus the explicit --local-ioc file. Each feed loads
+// and fails independently; feed problems are returned as warning notes,
+// never as errors.
 func (a *app) loadBaseIOCs(ctx context.Context) (*ioc.Set, []string, error) {
 	set := ioc.NewSet()
-	feedSet, notes := a.loadFeedSet(ctx, time.Now())
-	set.Merge(feedSet)
+	var notes []string
+	now := time.Now()
+	for _, spec := range a.feeds {
+		feedSet, feedNotes := a.loadFeedSet(ctx, spec, now)
+		set.Merge(feedSet)
+		notes = append(notes, feedNotes...)
+	}
 
 	if a.opts.localIOC != "" {
 		localSet, localNote, err := loadLocalSet(a.opts.localIOC, "")
@@ -297,17 +398,21 @@ func withProjectIOCs(base *ioc.Set, dir string) (*ioc.Set, string, error) {
 	return merged, note, nil
 }
 
-// loadFeedSet returns the feed-based IOC set. The cached copy is used
-// while younger than cacheTTL; otherwise the feed is re-downloaded. Any
-// failure falls back to the stale cache (or to no feed data at all) with a
-// warning note — a broken feed never stops the scan.
-func (a *app) loadFeedSet(ctx context.Context, now time.Time) (*ioc.Set, []string) {
-	data, meta := a.cache.Load()
-	cacheMatches := data != nil && meta.URL == a.feedURL
+// loadFeedSet returns one feed's IOC set. The cached copy is used while
+// younger than cacheTTL; otherwise the feed is re-downloaded. Any failure
+// falls back to the stale cache (or to no feed data at all) with a warning
+// note — a broken feed never stops the scan.
+func (a *app) loadFeedSet(ctx context.Context, spec feedSpec, now time.Time) (*ioc.Set, []string) {
+	if spec.url == feedOff {
+		return nil, []string{spec.name + " disabled"}
+	}
+	cache := &feed.Cache{Dir: a.dataDir, Key: spec.key}
+	data, meta := cache.Load()
+	cacheMatches := data != nil && meta.URL == spec.url
 
 	if cacheMatches && meta.Fresh(cacheTTL, now) {
-		if set, err := ioc.Parse(data, a.feedURL); err == nil {
-			return set, []string{fmt.Sprintf("feed cache fresh (%s old)", meta.Age(now))}
+		if set, err := spec.parse(data, spec.url); err == nil {
+			return set, []string{fmt.Sprintf("%s cache fresh (%s old)", spec.name, meta.Age(now))}
 		}
 		// An unreadable cache falls through to a refetch.
 	}
@@ -316,44 +421,44 @@ func (a *app) loadFeedSet(ctx context.Context, now time.Time) (*ioc.Set, []strin
 	if cacheMatches {
 		etag = meta.ETag
 	}
-	a.prog.announce("refreshing threat feed…")
-	res, err := a.client.Fetch(ctx, a.feedURL, etag)
+	a.prog.announce("refreshing " + spec.name + "…")
+	res, err := a.client.Fetch(ctx, spec.url, etag)
 	if err != nil {
-		return a.staleFeedFallback(data, meta, err, now)
+		return a.staleFeedFallback(spec, data, meta, err, now)
 	}
 	if res.NotModified && cacheMatches {
-		return a.notModifiedFeedSet(data, meta, etag, now)
+		return a.notModifiedFeedSet(spec, cache, data, etag, now)
 	}
-	set, err := ioc.Parse(res.Data, a.feedURL)
+	set, err := spec.parse(res.Data, spec.url)
 	if err != nil {
-		return a.staleFeedFallback(data, meta, fmt.Errorf("downloaded feed is not usable: %w", err), now)
+		return a.staleFeedFallback(spec, data, meta, fmt.Errorf("downloaded feed is not usable: %w", err), now)
 	}
-	if err := a.cache.Store(res.Data, feed.Meta{URL: a.feedURL, ETag: res.ETag, FetchedAt: now}); err != nil {
-		return set, []string{fmt.Sprintf("feed refreshed: %d Go entries (WARNING: cache write failed: %v)", set.Len(), err)}
+	if err := cache.Store(res.Data, feed.Meta{URL: spec.url, ETag: res.ETag, FetchedAt: now}); err != nil {
+		return set, []string{fmt.Sprintf("%s refreshed: %d Go entries (WARNING: cache write failed: %v)", spec.name, set.Len(), err)}
 	}
-	return set, []string{fmt.Sprintf("feed refreshed: %d Go entries", set.Len())}
+	return set, []string{fmt.Sprintf("%s refreshed: %d Go entries", spec.name, set.Len())}
 }
 
 // staleFeedFallback serves the stale cached feed after a download failure,
 // or no feed data at all, always with a warning note.
-func (a *app) staleFeedFallback(data []byte, meta *feed.Meta, cause error, now time.Time) (*ioc.Set, []string) {
-	if data != nil && meta.URL == a.feedURL {
-		if set, err := ioc.Parse(data, a.feedURL); err == nil {
-			return set, []string{fmt.Sprintf("WARNING: feed download failed (%v); using cached feed from %s ago", cause, meta.Age(now))}
+func (a *app) staleFeedFallback(spec feedSpec, data []byte, meta *feed.Meta, cause error, now time.Time) (*ioc.Set, []string) {
+	if data != nil && meta.URL == spec.url {
+		if set, err := spec.parse(data, spec.url); err == nil {
+			return set, []string{fmt.Sprintf("WARNING: %s download failed (%v); using cached feed from %s ago", spec.name, cause, meta.Age(now))}
 		}
 	}
-	return nil, []string{fmt.Sprintf("WARNING: feed download failed (%v); no usable cached copy — scanning with local IOC files and typosquat heuristics only", cause)}
+	return nil, []string{fmt.Sprintf("WARNING: %s download failed (%v); no usable cached copy — continuing without it", spec.name, cause)}
 }
 
 // notModifiedFeedSet keeps serving the cache after a 304 response and bumps
 // the cache timestamp.
-func (a *app) notModifiedFeedSet(data []byte, meta *feed.Meta, etag string, now time.Time) (*ioc.Set, []string) {
-	set, err := ioc.Parse(data, a.feedURL)
+func (a *app) notModifiedFeedSet(spec feedSpec, cache *feed.Cache, data []byte, etag string, now time.Time) (*ioc.Set, []string) {
+	set, err := spec.parse(data, spec.url)
 	if err != nil {
-		return a.staleFeedFallback(nil, nil, fmt.Errorf("cached feed is unreadable: %w", err), now)
+		return a.staleFeedFallback(spec, nil, nil, fmt.Errorf("cached feed is unreadable: %w", err), now)
 	}
-	note := "feed unchanged (304); using cache"
-	if werr := a.cache.WriteMeta(feed.Meta{URL: a.feedURL, ETag: etag, FetchedAt: now}); werr != nil {
+	note := spec.name + " unchanged (304); using cache"
+	if werr := cache.WriteMeta(feed.Meta{URL: spec.url, ETag: etag, FetchedAt: now}); werr != nil {
 		note += " (WARNING: cache timestamp update failed: " + werr.Error() + ")"
 	}
 	return set, []string{note}

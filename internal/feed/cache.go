@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 )
 
@@ -28,19 +29,51 @@ func (m *Meta) Age(now time.Time) string {
 // Cache stores one feed on disk: the raw bytes plus a metadata sidecar.
 type Cache struct {
 	Dir string
+	// Key distinguishes feeds that share one directory. An empty Key
+	// keeps the original feed.data / feed.meta.json file names.
+	Key string
 }
 
-// DefaultDir returns the per-user cache directory for goaudit.
+// DefaultDir returns the per-user directory goaudit stores feed data in:
+// each platform's standard home for durable program data (not the cache
+// class, which cleanup tools are free to wipe).
 func DefaultDir() (string, error) {
-	base, err := os.UserCacheDir()
-	if err != nil {
-		return "", fmt.Errorf("locate user cache dir: %w", err)
+	switch runtime.GOOS {
+	case "windows":
+		// %LocalAppData% is the Windows home for per-user program data.
+		// os.UserCacheDir resolves to exactly that directory.
+		base, err := os.UserCacheDir()
+		if err != nil {
+			return "", fmt.Errorf("locate user data dir: %w", err)
+		}
+		return filepath.Join(base, "goaudit"), nil
+	case "darwin":
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("locate user data dir: %w", err)
+		}
+		return filepath.Join(home, "Library", "Application Support", "goaudit"), nil
+	default:
+		if dir := os.Getenv("XDG_DATA_HOME"); dir != "" {
+			return filepath.Join(dir, "goaudit"), nil
+		}
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("locate user data dir: %w", err)
+		}
+		return filepath.Join(home, ".local", "share", "goaudit"), nil
 	}
-	return filepath.Join(base, "goaudit"), nil
 }
 
-func (c *Cache) dataPath() string { return filepath.Join(c.Dir, "feed.data") }
-func (c *Cache) metaPath() string { return filepath.Join(c.Dir, "feed.meta.json") }
+func (c *Cache) dataPath() string { return filepath.Join(c.Dir, c.fileName("data")) }
+func (c *Cache) metaPath() string { return filepath.Join(c.Dir, c.fileName("meta.json")) }
+
+func (c *Cache) fileName(ext string) string {
+	if c.Key == "" {
+		return "feed." + ext
+	}
+	return "feed-" + c.Key + "." + ext
+}
 
 // Load returns the cached feed bytes and metadata, or (nil, nil) when no
 // usable cache exists. A corrupt or partial cache is treated as missing so

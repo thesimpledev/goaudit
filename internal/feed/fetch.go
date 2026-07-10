@@ -10,8 +10,9 @@ import (
 )
 
 // maxFeedBytes caps how much feed data is read, as a guard against a
-// misconfigured URL streaming unbounded data.
-const maxFeedBytes = 32 << 20
+// misconfigured URL streaming unbounded data. Sized well above the OSV
+// ecosystem export (~10 MiB) so growth doesn't hit the limit for years.
+const maxFeedBytes = 64 << 20
 
 const defaultTimeout = 30 * time.Second
 
@@ -74,7 +75,7 @@ func (c *Client) fetchOnce(ctx context.Context, url, etag string) (res *Result, 
 		return nil, false, fmt.Errorf("build feed request: %w", err)
 	}
 	req.Header.Set("User-Agent", "goaudit/1.0")
-	req.Header.Set("Accept", "application/json, text/csv, text/plain")
+	req.Header.Set("Accept", "application/json, text/csv, text/plain, application/zip, */*")
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}
@@ -103,9 +104,15 @@ func (c *Client) fetchOnce(ctx context.Context, url, etag string) (res *Result, 
 		return nil, false, fmt.Errorf("fetch feed %s: server returned %s", url, resp.Status)
 	}
 
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxFeedBytes))
+	// Read one byte past the cap so an oversized feed is an explicit
+	// error, not a silent truncation (a truncated zip loses its central
+	// directory and would fail parsing in a confusing way).
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxFeedBytes+1))
 	if err != nil {
 		return nil, true, fmt.Errorf("read feed %s: %w", url, err)
+	}
+	if len(data) > maxFeedBytes {
+		return nil, false, fmt.Errorf("feed %s exceeds the %d MiB size limit", url, maxFeedBytes>>20)
 	}
 	return &Result{Data: data, ETag: resp.Header.Get("Etag")}, false, nil
 }

@@ -99,7 +99,7 @@ func (a *app) scanProject(ctx context.Context, dir string, base *ioc.Set) report
 		notes = append(notes, localNote)
 	}
 	findings, modulePath := buildFindings(mods, match.NewEngine(set))
-	issues, checkNotes := runChecks(ctx, dir)
+	issues, checkNotes := a.runChecks(ctx, dir)
 	notes = append(notes, checkNotes...)
 	res.Name = nameFromModule(modulePath, dir)
 	res.Report = report.New(dir, set.Len(), notes, findings, issues)
