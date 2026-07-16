@@ -36,7 +36,7 @@ func TestMultiTotals(t *testing.T) {
 
 func TestMultiWriteText(t *testing.T) {
 	var buf bytes.Buffer
-	if err := multiFixture().WriteText(&buf, false); err != nil {
+	if err := multiFixture().WriteText(&buf, false, false); err != nil {
 		t.Fatalf("WriteText: %v", err)
 	}
 	out := buf.String()
@@ -70,7 +70,7 @@ func TestMultiWriteTextTruncatesLongErrors(t *testing.T) {
 		{Name: "noisy", Dir: "/root/noisy", Err: long},
 	})
 	var buf bytes.Buffer
-	if err := m.WriteText(&buf, false); err != nil {
+	if err := m.WriteText(&buf, false, false); err != nil {
 		t.Fatalf("WriteText: %v", err)
 	}
 	out := buf.String()
@@ -87,7 +87,7 @@ func TestMultiWriteTextTruncatesLongErrors(t *testing.T) {
 
 func TestMultiWriteTextVerbose(t *testing.T) {
 	var buf bytes.Buffer
-	if err := multiFixture().WriteText(&buf, true); err != nil {
+	if err := multiFixture().WriteText(&buf, true, false); err != nil {
 		t.Fatalf("WriteText: %v", err)
 	}
 	if !strings.Contains(buf.String(), "github.com/ok/dep") {

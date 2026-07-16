@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -52,7 +53,10 @@ func (a *app) scanMulti(ctx context.Context) int {
 	results := a.scanAll(ctx, dirs, base)
 	rep := report.NewMulti(a.projectDir, base.Len(), notes, results)
 	a.prog.finish()
-	if err := a.writeReports(rep.WriteText, rep.WriteJSON); err != nil {
+	if err := a.writeReports(
+		func(w io.Writer) error { return rep.WriteText(w, a.opts.verbose, a.opts.cli) },
+		func(w io.Writer) error { return rep.WriteJSON(w, a.opts.verbose) },
+	); err != nil {
 		return a.fail(fmt.Errorf("write report: %w", err))
 	}
 	return multiExitCode(rep, a.opts.failOnWarn)

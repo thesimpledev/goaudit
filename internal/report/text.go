@@ -23,9 +23,15 @@ func (p *printer) printf(format string, args ...any) {
 	_, p.err = fmt.Fprintf(p.w, format, args...)
 }
 
+// maxIssuesPerTool caps how many lines one tool may print in the text
+// report so a messy repo cannot drown it. Suppressed lines are summed
+// into one "+N more" line per tool; the counts in the result line and
+// the JSON report always cover everything. --cli lifts the cap.
+const maxIssuesPerTool = 10
+
 // WriteText renders the report for humans. Clean modules are listed only
-// when verbose is true.
-func (r *Report) WriteText(w io.Writer, verbose bool) error {
+// when verbose is true; full lifts the per-tool cap on issue lines.
+func (r *Report) WriteText(w io.Writer, verbose, full bool) error {
 	p := &printer{w: w}
 	flagged, warnings, clean := r.Counts()
 	total := flagged + warnings + clean
@@ -38,7 +44,7 @@ func (r *Report) WriteText(w io.Writer, verbose bool) error {
 	p.printf("\n")
 
 	shown := writeFindings(p, r.Findings, verbose, "")
-	shown += writeIssues(p, r.Issues, "")
+	shown += writeIssues(p, r.Issues, "", full)
 	if shown > 0 {
 		p.printf("\n")
 	}
@@ -55,16 +61,41 @@ func (r *Report) WriteText(w io.Writer, verbose bool) error {
 
 // writeIssues prints one line per check-suite entry with the given
 // indent — security findings labeled SECURITY, the rest ISSUE — and
-// returns how many were shown.
-func writeIssues(p *printer, issues []checks.Issue, indent string) int {
+// returns how many lines were printed. Unless full is set, each tool
+// prints at most maxIssuesPerTool lines; the rest collapse into one
+// "+N more" line per tool after the list.
+func writeIssues(p *printer, issues []checks.Issue, indent string, full bool) int {
+	shown := 0
+	printed := map[string]int{}
+	hidden := map[string]int{}
+	hiddenSecurity := map[string]bool{}
+	var hiddenOrder []string
 	for _, is := range issues {
-		label := "ISSUE"
-		if is.Security {
-			label = "SECURITY"
+		if !full && printed[is.Tool] >= maxIssuesPerTool {
+			if hidden[is.Tool] == 0 {
+				hiddenOrder = append(hiddenOrder, is.Tool)
+			}
+			hidden[is.Tool]++
+			hiddenSecurity[is.Tool] = hiddenSecurity[is.Tool] || is.Security
+			continue
 		}
-		p.printf("%s%-8s [%s] %s\n", indent, label, is.Tool, is.Detail)
+		printed[is.Tool]++
+		shown++
+		p.printf("%s%-8s [%s] %s\n", indent, issueLabel(is.Security), is.Tool, is.Detail)
 	}
-	return len(issues)
+	for _, tool := range hiddenOrder {
+		shown++
+		p.printf("%s%-8s [%s] (+%d more %s findings; rerun with --cli or see the JSON report)\n",
+			indent, issueLabel(hiddenSecurity[tool]), tool, hidden[tool], tool)
+	}
+	return shown
+}
+
+func issueLabel(security bool) string {
+	if security {
+		return "SECURITY"
+	}
+	return "ISSUE"
 }
 
 // writeFindings prints one line per finding with the given indent,

@@ -71,8 +71,9 @@ func (m *MultiReport) Totals() TotalCounts {
 }
 
 // WriteText renders the combined report for humans, one section per
-// project. Clean modules are listed only when verbose is true.
-func (m *MultiReport) WriteText(w io.Writer, verbose bool) error {
+// project. Clean modules are listed only when verbose is true; full
+// lifts the per-tool cap on issue lines.
+func (m *MultiReport) WriteText(w io.Writer, verbose, full bool) error {
 	p := &printer{w: w}
 	p.printf("goaudit multi-project audit: %s\n", m.Root)
 	p.printf("projects found: %d | shared IOC entries: %d\n", len(m.Projects), m.IOCCount)
@@ -80,7 +81,7 @@ func (m *MultiReport) WriteText(w io.Writer, verbose bool) error {
 		p.printf("note: %s\n", note)
 	}
 	for _, pr := range m.Projects {
-		writeProjectSection(p, pr, verbose)
+		writeProjectSection(p, pr, verbose, full)
 	}
 	t := m.Totals()
 	p.printf("\noverall: %d projects, %d modules checked | %d flagged, %d warning(s), %d security finding(s), %d issue(s), %d failed\n",
@@ -88,7 +89,7 @@ func (m *MultiReport) WriteText(w io.Writer, verbose bool) error {
 	return p.err
 }
 
-func writeProjectSection(p *printer, pr ProjectResult, verbose bool) {
+func writeProjectSection(p *printer, pr ProjectResult, verbose, full bool) {
 	p.printf("\n── %s (%s)\n", pr.Name, pr.Dir)
 	if pr.Err != nil {
 		line, more := firstLine(pr.Err.Error())
@@ -102,7 +103,7 @@ func writeProjectSection(p *printer, pr ProjectResult, verbose bool) {
 		p.printf("   note: %s\n", note)
 	}
 	writeFindings(p, pr.Report.Findings, verbose, "   ")
-	writeIssues(p, pr.Report.Issues, "   ")
+	writeIssues(p, pr.Report.Issues, "   ", full)
 	flagged, warnings, clean := pr.Report.Counts()
 	security, issues := pr.Report.IssueCounts()
 	if flagged == 0 && warnings == 0 && security == 0 && issues == 0 {

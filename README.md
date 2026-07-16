@@ -94,8 +94,11 @@ quality/security pipeline, with all tool noise stripped:
 | `go vet`, `staticcheck`, `errcheck`, `revive` | `ISSUE` — one line per diagnostic |
 | `go test -race -vet=all -shuffle=on -count=1 -timeout=30s` | `ISSUE` — failing tests, build failures, data races |
 
-Output is capped at 10 lines per tool per project (with a `+N more`
-marker). A clean project collapses to a single line. revive uses a
+The text report shows at most 10 lines per tool per project, summing
+the rest into one `+N more` line — but the counts in the result line
+always cover every finding. `--cli` prints every line, and the JSON
+report is never capped. A clean project collapses to a single line.
+revive uses a
 `revive.toml` found in the scanned project if there is one, then
 `~/.revive.toml`, otherwise it's skipped.
 
@@ -133,7 +136,11 @@ goaudit --path . --fail-on-warn   # anything at all fails the gate
 | `--local-ioc` | (none) | Extra IOC file applied to every scanned project |
 | `--fail-on-warn` | false | Warnings and issues also fail the run |
 | `--verbose` | false | Include clean modules in the report |
+| `--cli` | false | Show every check finding in the text report instead of 10 lines per tool (the JSON report always has everything) |
 | `--update-baselines` | false | Re-record each project's capslock capability baseline, accepting its current capabilities |
+
+`goaudit help` (or `--help`) prints the full built-in reference: flags,
+exit codes, environment variables, and examples.
 
 Interactive runs show a live progress line on stderr
 (`auditing [12/93] owner/repo`); it disappears automatically when

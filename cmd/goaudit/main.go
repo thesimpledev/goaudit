@@ -76,6 +76,7 @@ type options struct {
 	recursive       bool
 	failOnWarn      bool
 	verbose         bool
+	cli             bool
 	updateBaselines bool
 }
 
@@ -90,6 +91,11 @@ func printf(w io.Writer, format string, args ...any) {
 }
 
 func run(argv []string, stdout, stderr io.Writer) int {
+	if len(argv) > 0 && argv[0] == "help" {
+		var opts options
+		newFlagSet(&opts, stdout).Usage()
+		return exitClean
+	}
 	opts, code, ok := parseFlags(argv, stderr)
 	if !ok {
 		return code
@@ -106,17 +112,26 @@ func run(argv []string, stdout, stderr io.Writer) int {
 	return a.scan(ctx)
 }
 
-// parseFlags parses argv into options. When ok is false the returned code
-// is the process exit code.
-func parseFlags(argv []string, stderr io.Writer) (opts options, code int, ok bool) {
+// newFlagSet defines every flag into opts, sending parse errors and the
+// help text to w.
+func newFlagSet(opts *options, w io.Writer) *flag.FlagSet {
 	fs := flag.NewFlagSet("goaudit", flag.ContinueOnError)
-	fs.SetOutput(stderr)
+	fs.SetOutput(w)
 	fs.StringVar(&opts.path, "path", ".", "project directory, or a parent directory of many projects")
 	fs.StringVar(&opts.localIOC, "local-ioc", "", "extra IOC file applied to every scanned project (each project's "+localIOCName+" is always auto-detected)")
 	fs.BoolVar(&opts.recursive, "recursive", false, "scan every Go project found under --path (automatic when --path has no go.mod)")
 	fs.BoolVar(&opts.failOnWarn, "fail-on-warn", false, "exit 2 when warnings are found")
 	fs.BoolVar(&opts.verbose, "verbose", false, "include clean modules in the report")
+	fs.BoolVar(&opts.cli, "cli", false, "show every check finding in the text report instead of 10 lines per tool")
 	fs.BoolVar(&opts.updateBaselines, "update-baselines", false, "re-record each project's capslock capability baseline, accepting its current capabilities")
+	fs.Usage = func() { printUsage(w, fs) }
+	return fs
+}
+
+// parseFlags parses argv into options. When ok is false the returned code
+// is the process exit code.
+func parseFlags(argv []string, stderr io.Writer) (opts options, code int, ok bool) {
+	fs := newFlagSet(&opts, stderr)
 	if err := fs.Parse(argv); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return opts, exitClean, false
@@ -239,7 +254,10 @@ func (a *app) scan(ctx context.Context) int {
 	notes = append(notes, checkNotes...)
 	rep := report.New(a.projectDir, set.Len(), notes, findings, issues)
 	a.prog.finish()
-	if err := a.writeReports(rep.WriteText, rep.WriteJSON); err != nil {
+	if err := a.writeReports(
+		func(w io.Writer) error { return rep.WriteText(w, a.opts.verbose, a.opts.cli) },
+		func(w io.Writer) error { return rep.WriteJSON(w, a.opts.verbose) },
+	); err != nil {
 		return a.fail(fmt.Errorf("write report: %w", err))
 	}
 
@@ -321,12 +339,12 @@ func parseSkipChecks(value string) (skipAll bool, skip map[string]bool) {
 // file in the scanned directory. A JSON write failure (read-only tree, no
 // permission) is reported as a warning, never as a run failure — the exit
 // code must stay driven by what the audit found.
-func (a *app) writeReports(text, json func(io.Writer, bool) error) error {
-	if err := text(a.stdout, a.opts.verbose); err != nil {
+func (a *app) writeReports(text, json func(io.Writer) error) error {
+	if err := text(a.stdout); err != nil {
 		return err
 	}
 	path := filepath.Join(a.projectDir, jsonReportName)
-	if err := writeJSONFile(path, json, a.opts.verbose); err != nil {
+	if err := writeJSONFile(path, json); err != nil {
 		printf(a.stderr, "goaudit: WARNING: could not write %s: %v\n", path, err)
 		return nil
 	}
@@ -334,12 +352,12 @@ func (a *app) writeReports(text, json func(io.Writer, bool) error) error {
 	return nil
 }
 
-func writeJSONFile(path string, write func(io.Writer, bool) error, verbose bool) error {
+func writeJSONFile(path string, write func(io.Writer) error) error {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600) // #nosec G304 -- the report lands in the user-chosen scan directory
 	if err != nil {
 		return err
 	}
-	werr := write(f, verbose)
+	werr := write(f)
 	if cerr := f.Close(); werr == nil {
 		werr = cerr
 	}

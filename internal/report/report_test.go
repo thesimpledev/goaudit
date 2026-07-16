@@ -36,7 +36,7 @@ func TestCounts(t *testing.T) {
 func TestWriteText(t *testing.T) {
 	r := New("/proj", 10, []string{"a note"}, testFindings(), nil)
 	var buf bytes.Buffer
-	if err := r.WriteText(&buf, false); err != nil {
+	if err := r.WriteText(&buf, false, false); err != nil {
 		t.Fatalf("WriteText: %v", err)
 	}
 	out := buf.String()
@@ -50,7 +50,7 @@ func TestWriteText(t *testing.T) {
 	}
 
 	buf.Reset()
-	if err := r.WriteText(&buf, true); err != nil {
+	if err := r.WriteText(&buf, true, false); err != nil {
 		t.Fatalf("WriteText verbose: %v", err)
 	}
 	if !strings.Contains(buf.String(), "github.com/ok/dep") {
@@ -61,7 +61,7 @@ func TestWriteText(t *testing.T) {
 func TestWriteTextAllClean(t *testing.T) {
 	r := New("/proj", 0, nil, []match.Finding{{Module: "github.com/ok/dep", Status: match.Clean}}, nil)
 	var buf bytes.Buffer
-	if err := r.WriteText(&buf, false); err != nil {
+	if err := r.WriteText(&buf, false, false); err != nil {
 		t.Fatalf("WriteText: %v", err)
 	}
 	if !strings.Contains(buf.String(), "all 1 modules clean") {
@@ -76,7 +76,7 @@ func TestWriteTextIssues(t *testing.T) {
 	}
 	r := New("/proj", 0, nil, []match.Finding{{Module: "github.com/ok/dep", Status: match.Clean}}, issues)
 	var buf bytes.Buffer
-	if err := r.WriteText(&buf, false); err != nil {
+	if err := r.WriteText(&buf, false, false); err != nil {
 		t.Fatalf("WriteText: %v", err)
 	}
 	out := buf.String()
@@ -91,6 +91,75 @@ func TestWriteTextIssues(t *testing.T) {
 	}
 	if strings.Index(out, "SECURITY") > strings.Index(out, "ISSUE") {
 		t.Errorf("security findings should render before ordinary issues:\n%s", out)
+	}
+}
+
+func manyIssues() []checks.Issue {
+	var issues []checks.Issue
+	for range 25 {
+		issues = append(issues, checks.Issue{Tool: "revive", Detail: "x"})
+	}
+	for range 12 {
+		issues = append(issues, checks.Issue{Tool: "gosec", Detail: "y", Security: true})
+	}
+	return issues
+}
+
+func TestWriteTextCapsPerTool(t *testing.T) {
+	r := New("/proj", 0, nil, nil, manyIssues())
+	var buf bytes.Buffer
+	if err := r.WriteText(&buf, false, false); err != nil {
+		t.Fatalf("WriteText: %v", err)
+	}
+	out := buf.String()
+	if got := strings.Count(out, "[revive]"); got != 11 {
+		t.Errorf("revive lines = %d, want 10 shown + 1 marker:\n%s", got, out)
+	}
+	if !strings.Contains(out, "ISSUE    [revive] (+15 more revive findings") {
+		t.Errorf("missing revive truncation marker:\n%s", out)
+	}
+	if !strings.Contains(out, "SECURITY [gosec] (+2 more gosec findings") {
+		t.Errorf("suppressed security findings should keep the SECURITY label:\n%s", out)
+	}
+	if !strings.Contains(out, "result: 0 flagged, 0 warning(s), 12 security finding(s), 25 issue(s), 0 clean") {
+		t.Errorf("result line must count every finding, not just the shown lines:\n%s", out)
+	}
+}
+
+func TestWriteTextFullLiftsCap(t *testing.T) {
+	r := New("/proj", 0, nil, nil, manyIssues())
+	var buf bytes.Buffer
+	if err := r.WriteText(&buf, false, true); err != nil {
+		t.Fatalf("WriteText: %v", err)
+	}
+	out := buf.String()
+	if strings.Contains(out, "more revive findings") || strings.Contains(out, "more gosec findings") {
+		t.Errorf("full output should have no truncation markers:\n%s", out)
+	}
+	if got := strings.Count(out, "[revive]"); got != 25 {
+		t.Errorf("revive lines = %d, want all 25:\n%s", got, out)
+	}
+}
+
+func TestWriteJSONKeepsAllIssues(t *testing.T) {
+	r := New("/proj", 0, nil, nil, manyIssues())
+	var buf bytes.Buffer
+	if err := r.WriteJSON(&buf, false); err != nil {
+		t.Fatalf("WriteJSON: %v", err)
+	}
+	var got struct {
+		Security int            `json:"security"`
+		Issues   int            `json:"issues"`
+		Checks   []checks.Issue `json:"checks"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("output is not valid JSON: %v\n%s", err, buf.String())
+	}
+	if got.Security != 12 || got.Issues != 25 {
+		t.Errorf("counts = %d security / %d issues, want 12/25", got.Security, got.Issues)
+	}
+	if len(got.Checks) != 37 {
+		t.Errorf("checks = %d entries, want all 37 (JSON is never capped)", len(got.Checks))
 	}
 }
 

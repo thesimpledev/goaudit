@@ -101,7 +101,7 @@ func Capslock(ctx context.Context, dir string, updateBaseline bool) ([]Issue, []
 
 	if baseline == nil || updateBaseline {
 		notes = append(notes, recordBaseline(dir, env, current))
-		return capIssues(firstRunIssues(current), "capslock"), notes
+		return firstRunIssues(current), notes
 	}
 	return diffRun(dir, env, baseline, current, notes)
 }
@@ -140,7 +140,7 @@ func diffRun(dir string, env capslockEnv, baseline *capslockBaseline, current ma
 	if v := capslockVersion(env.bin); baseline.CapslockVersion != "" && v != "" && v != baseline.CapslockVersion {
 		notes = append(notes, fmt.Sprintf("capslock: analyzer upgraded since the baseline (%s → %s); some gains may come from the upgrade, not your dependencies", baseline.CapslockVersion, v))
 	}
-	return capIssues(gainIssues(gains), "capslock"), notes
+	return gainIssues(gains), notes
 }
 
 // refreshNote keeps only the failure half of a recordBaseline note: on a

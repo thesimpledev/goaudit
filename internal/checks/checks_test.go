@@ -177,24 +177,6 @@ ok  	github.com/x/y/other	0.045s
 	}
 }
 
-func TestCapIssues(t *testing.T) {
-	var many []Issue
-	for range 25 {
-		many = append(many, Issue{Tool: "gosec", Detail: "x", Security: true})
-	}
-	capped := capIssues(many, "gosec")
-	if len(capped) != maxIssuesPerTool+1 {
-		t.Fatalf("len = %d, want %d", len(capped), maxIssuesPerTool+1)
-	}
-	marker := capped[maxIssuesPerTool]
-	if !strings.Contains(marker.Detail, "+15 more gosec") {
-		t.Errorf("truncation notice = %+v", marker)
-	}
-	if !marker.Security {
-		t.Error("truncation marker should keep the tool's security level")
-	}
-}
-
 // TestRunGofmtAndVet exercises the real execution path with the two tools
 // that ship with Go itself, against a fixture with a known formatting
 // problem.

@@ -537,6 +537,33 @@ func TestParseSkipChecks(t *testing.T) {
 	}
 }
 
+func TestCLIFlag(t *testing.T) {
+	var errOut bytes.Buffer
+	opts, _, ok := parseFlags([]string{"--cli"}, &errOut)
+	if !ok || !opts.cli {
+		t.Errorf("flag not parsed: %+v (%s)", opts, errOut.String())
+	}
+	opts, _, ok = parseFlags(nil, &errOut)
+	if !ok || opts.cli {
+		t.Errorf("flag should default to false: %+v", opts)
+	}
+}
+
+func TestHelp(t *testing.T) {
+	for _, argv := range [][]string{{"help"}, {"-help"}, {"--help"}, {"-h"}} {
+		var stdout, stderr bytes.Buffer
+		if code := run(argv, &stdout, &stderr); code != exitClean {
+			t.Errorf("run(%v) = %d, want %d", argv, code, exitClean)
+		}
+		out := stdout.String() + stderr.String()
+		for _, want := range []string{"Usage:", "-cli", "Exit codes:", "GOAUDIT_SKIP_CHECKS"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("run(%v) help output missing %q:\n%s", argv, want, out)
+			}
+		}
+	}
+}
+
 func TestUpdateBaselinesFlag(t *testing.T) {
 	var errOut bytes.Buffer
 	opts, _, ok := parseFlags([]string{"--update-baselines", "--path", "x"}, &errOut)

@@ -1,6 +1,6 @@
 // Package checks runs the standard quality and security tool suite
-// against a project and reduces each tool's output to a short list of
-// issues, so the audit report shows only problems, never tool noise.
+// against a project and reduces each tool's output to a list of issues,
+// so the audit report shows only problems, never tool noise.
 package checks
 
 import (
@@ -14,10 +14,6 @@ import (
 	"strings"
 	"sync"
 )
-
-// maxIssuesPerTool caps how many lines one tool may contribute for one
-// project so a messy repo cannot drown the report.
-const maxIssuesPerTool = 10
 
 // Issue is one problem reported by one tool. Security marks findings from
 // the security scanners (gosec, govulncheck), which rank above ordinary
@@ -126,7 +122,7 @@ func Run(ctx context.Context, dir string, tools []Tool) ([]Issue, []string) {
 			continue
 		}
 		tool.Args = args
-		issues = append(issues, capIssues(runTool(ctx, dir, tool), tool.Name)...)
+		issues = append(issues, runTool(ctx, dir, tool)...)
 	}
 	return issues, notes
 }
@@ -214,18 +210,6 @@ func listPackages(ctx context.Context, dir string) (pkgs, broken []string) {
 		}
 	}
 	return pkgs, broken
-}
-
-func capIssues(issues []Issue, tool string) []Issue {
-	if len(issues) <= maxIssuesPerTool {
-		return issues
-	}
-	kept := append([]Issue{}, issues[:maxIssuesPerTool]...)
-	return append(kept, Issue{
-		Tool:     tool,
-		Detail:   fmt.Sprintf("(+%d more %s findings)", len(issues)-maxIssuesPerTool, tool),
-		Security: issues[0].Security,
-	})
 }
 
 // outputLines merges and splits both output streams into trimmed lines.
