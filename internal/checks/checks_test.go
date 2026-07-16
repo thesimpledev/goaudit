@@ -20,6 +20,86 @@ func TestParseGofmt(t *testing.T) {
 	}
 }
 
+func TestParseGofix(t *testing.T) {
+	diff := []byte(`--- /proj/main.go (old)
++++ /proj/main.go (new)
+@@ -2,3 +2,3 @@
+-func echo(v interface{}) interface{} { return v }
++func echo(v any) any { return v }
+--- /proj/main.go (old)
++++ /proj/main.go (new)
+@@ -8,3 +8,3 @@
+-	var x interface{} = 1
++	var x any = 1
+--- /proj/sub/util.go (old)
++++ /proj/sub/util.go (new)
+@@ -1,1 +1,1 @@
+-old
++new
+--- /proj/vendor/dep/x.go (old)
++++ /proj/vendor/dep/x.go (new)
+@@ -1,1 +1,1 @@
+-old
++new
+`)
+	issues := parseGofix("/proj", diff, nil, 1)
+	if len(issues) != 1 {
+		t.Fatalf("issues = %+v, want one summary line", issues)
+	}
+	if !strings.Contains(issues[0].Detail, "2 file(s)") {
+		t.Errorf("detail = %q, want a 2-file summary (main.go deduped, vendor skipped)", issues[0].Detail)
+	}
+	if strings.Contains(issues[0].Detail, "interface{}") {
+		t.Errorf("detail = %q, diff hunks must not leak into the report", issues[0].Detail)
+	}
+
+	if issues := parseGofix("/proj", nil, nil, 0); issues != nil {
+		t.Errorf("exit 0 should mean no issues, got %+v", issues)
+	}
+	vendorOnly := []byte("--- /proj/vendor/dep/x.go (old)\n+++ /proj/vendor/dep/x.go (new)\n@@ -1,1 +1,1 @@\n-old\n+new\n")
+	if issues := parseGofix("/proj", vendorOnly, nil, 1); issues != nil {
+		t.Errorf("vendor-only diff should be silent, got %+v", issues)
+	}
+	broken := parseGofix("/proj", nil, []byte("go: cannot find module\n"), 1)
+	if len(broken) != 1 || broken[0].Detail != "go: cannot find module" {
+		t.Errorf("failure without a diff should surface the error, got %+v", broken)
+	}
+}
+
+// TestRunGofix exercises the real `go fix -diff` path against a fixture
+// with a known modernization (interface{} -> any) and proves the audit
+// only reports — the source file must be byte-identical afterwards.
+func TestRunGofix(t *testing.T) {
+	if !gofixSupportsDiff() {
+		t.Skip("installed go toolchain has no `go fix -diff` (needs Go 1.26+)")
+	}
+	dir := t.TempDir()
+	src := "package fixture\n\nfunc Echo(v interface{}) interface{} { return v }\n"
+	for name, content := range map[string]string{
+		"go.mod":  "module example.test/fixture\n\ngo 1.26\n",
+		"main.go": src,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tools := []Tool{{Name: "gofix", Resolve: gofixArgs, Parse: parseGofix}}
+	issues, notes := Run(context.Background(), dir, tools)
+	if len(notes) != 0 {
+		t.Errorf("unexpected notes: %v", notes)
+	}
+	if len(issues) != 1 || issues[0].Tool != "gofix" || !strings.Contains(issues[0].Detail, "1 file(s)") {
+		t.Fatalf("issues = %+v, want one gofix summary naming 1 file", issues)
+	}
+	after, err := os.ReadFile(filepath.Join(dir, "main.go")) // #nosec G304 -- test-owned temp dir
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != src {
+		t.Fatal("go fix modified the source file; the audit must never rewrite code")
+	}
+}
+
 func TestLineParserGatesOnExitCode(t *testing.T) {
 	parse := lineParser("staticcheck", false)
 	if issues := parse("/proj", []byte("noise on success\n"), nil, 0); issues != nil {

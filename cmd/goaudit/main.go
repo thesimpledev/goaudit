@@ -265,8 +265,9 @@ func exitFor(flagged, security, soft int, failOnWarn bool) int {
 	}
 }
 
-// runChecks executes the tool suite (vet, staticcheck, errcheck, revive,
-// gosec, govulncheck, go test, gofmt -l, capslock) against one project.
+// runChecks executes the tool suite (vet, gofix, staticcheck, errcheck,
+// revive, gosec, govulncheck, go test, gofmt -l, capslock) against one
+// project.
 // GOAUDIT_SKIP_CHECKS names checks to skip, or disables the whole suite.
 func (a *app) runChecks(ctx context.Context, dir string) ([]checks.Issue, []string) {
 	skipAll, skip := parseSkipChecks(os.Getenv("GOAUDIT_SKIP_CHECKS"))

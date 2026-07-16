@@ -41,8 +41,8 @@ campaign list) are built in and kept fresh automatically.
 > `.goaudit-capslock.json` capability baseline per project — that one
 > you should **commit** (see
 > [capability baselines](#capability-baselines-capslock)). Nothing else
-> in your tree is ever modified — formatting is checked with `gofmt -l`,
-> never rewritten.
+> in your tree is ever modified — formatting is checked with `gofmt -l`
+> and modernizations with `go fix -diff`, never rewritten or applied.
 
 ## Install
 
@@ -52,7 +52,8 @@ go install github.com/thesimpledev/goaudit/cmd/goaudit@latest
 
 That bare install already gives you the dependency audit (malicious
 packages + typosquats) plus the checks that ship with Go itself
-(`gofmt`, `go vet`, `go test -race`). For the full suite, install the
+(`gofmt`, `go vet`, `go fix -diff`, `go test -race`). For the full
+suite, install the
 optional analyzers — any that are missing are simply noted and
 skipped:
 
@@ -89,6 +90,7 @@ quality/security pipeline, with all tool noise stripped:
 | `govulncheck` | `SECURITY` — each known CVE whose vulnerable code is actually reached |
 | `capslock` | `SECURITY` — a dependency *gained* a high-risk capability since your baseline; `ISSUE` for the rest (see [capability baselines](#capability-baselines-capslock)) |
 | `gofmt -l` | `ISSUE` — files needing formatting (list only) |
+| `go fix -diff` | `ISSUE` — one summary line counting files with modernizations available (Go 1.26+; suggestions are never applied) |
 | `go vet`, `staticcheck`, `errcheck`, `revive` | `ISSUE` — one line per diagnostic |
 | `go test -race -vet=all -shuffle=on -count=1 -timeout=30s` | `ISSUE` — failing tests, build failures, data races |
 

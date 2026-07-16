@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 // maxIssuesPerTool caps how many lines one tool may contribute for one
@@ -39,13 +40,15 @@ type Tool struct {
 }
 
 // DefaultTools returns the standard check suite: gofmt (as -l, so the
-// audit never rewrites files), go vet, staticcheck, errcheck, revive,
+// audit never rewrites files), go vet, go fix (as -diff, reported as a
+// summary and likewise never applied), staticcheck, errcheck, revive,
 // gosec, govulncheck, and go test with the race detector. Coverage
 // artifacts are not collected.
 func DefaultTools() []Tool {
 	return []Tool{
 		{Name: "gofmt", Args: []string{"gofmt", "-l", "."}, Parse: parseGofmt},
 		{Name: "vet", Args: []string{"go", "vet", "./..."}, Parse: lineParser("vet", false)},
+		{Name: "gofix", Resolve: gofixArgs, Parse: parseGofix},
 		{Name: "staticcheck", Args: []string{"staticcheck", "./..."}, Parse: lineParser("staticcheck", false)},
 		{Name: "errcheck", Args: []string{"errcheck", "./..."}, Parse: lineParser("errcheck", false)},
 		// revive exits 0 even when it prints warnings, so its output is
@@ -55,6 +58,24 @@ func DefaultTools() []Tool {
 		{Name: "govulncheck", Args: []string{"govulncheck", "-json", "./..."}, Parse: parseGovulncheck},
 		{Name: "test", Args: []string{"go", "test", "./...", "-race", "-vet=all", "-shuffle=on", "-count=1", "-timeout=30s"}, Parse: parseGoTest},
 	}
+}
+
+// gofixSupportsDiff reports whether the installed go command has the
+// analysis-based `go fix -diff` mode (Go 1.26+). Without -diff, go fix
+// rewrites source files — something the audit must never do — so older
+// toolchains skip the check entirely. Toolchain auto-switching only ever
+// selects a version at least as new as the installed one, so this is
+// safe to cache across projects.
+var gofixSupportsDiff = sync.OnceValue(func() bool {
+	out, err := exec.Command("go", "help", "fix").CombinedOutput()
+	return err == nil && bytes.Contains(out, []byte("-diff"))
+})
+
+func gofixArgs(string) ([]string, string) {
+	if !gofixSupportsDiff() {
+		return nil, "go fix skipped: this toolchain has no -diff mode (Go 1.26+); the audit never applies fixes"
+	}
+	return []string{"go", "fix", "-diff", "./..."}, ""
 }
 
 // reviveArgs prefers a revive.toml committed in the scanned project, then
@@ -266,6 +287,43 @@ func parseGofmt(_ string, stdout, _ []byte, _ int) []Issue {
 		issues = append(issues, Issue{Tool: "gofmt", Detail: "file needs gofmt: " + line})
 	}
 	return issues
+}
+
+// parseGofix reduces `go fix -diff` output — a patch of suggested
+// modernizations that is only ever printed, never applied — to a single
+// summary line, so available fixes are visible without a wall of diff
+// hunks drowning the real findings. Exit 0 means nothing to fix; a
+// non-zero exit with no diff headers is a real failure (e.g. the module
+// does not build), reported as-is.
+func parseGofix(dir string, stdout, stderr []byte, exitCode int) []Issue {
+	if exitCode == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	sawDiff := false
+	for _, line := range outputLines(stdout, nil) {
+		name, ok := strings.CutPrefix(line, "--- ")
+		if !ok || !strings.HasSuffix(name, " (old)") {
+			continue
+		}
+		sawDiff = true
+		name = strings.TrimSuffix(name, " (old)")
+		if abs, err := filepath.Abs(dir); err == nil {
+			if rel, err := filepath.Rel(abs, name); err == nil {
+				name = rel
+			}
+		}
+		if !skipPath(name) {
+			seen[name] = true
+		}
+	}
+	if len(seen) == 0 {
+		if sawDiff {
+			return nil // every suggested fix was in vendored or generated paths
+		}
+		return []Issue{{Tool: "gofix", Detail: firstNonEmptyLine(stderr, stdout)}}
+	}
+	return []Issue{{Tool: "gofix", Detail: fmt.Sprintf("modernizations available in %d file(s) — preview with 'go fix -diff ./...' (never auto-applied)", len(seen))}}
 }
 
 func skipPath(p string) bool {
