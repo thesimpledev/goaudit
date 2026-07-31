@@ -111,6 +111,47 @@ func TestLineParserGatesOnExitCode(t *testing.T) {
 	}
 }
 
+// TestParseStaticcheckSplitsByCheckCode pins the split: the SA bug
+// checks are warnings, the style and simplification checks are issues,
+// and anything unrecognized is left for the tool's own level.
+func TestParseStaticcheckSplitsByCheckCode(t *testing.T) {
+	out := []byte(`main.go:10:2: this value of err is never used (SA4006)
+main.go:12:2: should use time.Since instead (S1012)
+main.go:14:1: error strings should not be capitalized (ST1005)
+main.go:16:1: func unusedHelper is unused (U1000)
+main.go:18:1: could apply De Morgan's law (QF1001)
+main.go:20:1: something new and unlabeled
+`)
+	issues := parseStaticcheck("/proj", out, nil, 1)
+	want := []Level{LevelWarning, LevelIssue, LevelIssue, LevelIssue, LevelIssue, ""}
+	if len(issues) != len(want) {
+		t.Fatalf("issues = %+v, want %d", issues, len(want))
+	}
+	for i, w := range want {
+		if issues[i].Level != w {
+			t.Errorf("%q level = %q, want %q", issues[i].Detail, issues[i].Level, w)
+		}
+	}
+}
+
+func TestTrailingCheckCode(t *testing.T) {
+	cases := map[string]string{
+		"main.go:1:1: msg (SA4006)":       "SA4006",
+		"main.go:1:1: msg (U1000)":        "U1000",
+		"main.go:1:1: msg (see the docs)": "",
+		"main.go:1:1: msg (SA4006) trail": "",
+		"main.go:1:1: msg":                "",
+		"main.go:1:1: msg ()":             "",
+		"main.go:1:1: msg (1000)":         "",
+		"main.go:1:1: msg (SA)":           "",
+	}
+	for detail, want := range cases {
+		if got := trailingCheckCode(detail); got != want {
+			t.Errorf("trailingCheckCode(%q) = %q, want %q", detail, got, want)
+		}
+	}
+}
+
 func TestLineParserEvenOnSuccess(t *testing.T) {
 	parse := lineParser("revive", true)
 	issues := parse("/proj", []byte("main.go:5:1: exported function X should have comment\n"), nil, 0)
@@ -129,8 +170,13 @@ func TestParseGosec(t *testing.T) {
 	if issues[0].Detail != want {
 		t.Errorf("detail = %q, want %q", issues[0].Detail, want)
 	}
-	if !issues[0].Security {
-		t.Error("gosec findings must be marked as security findings")
+	if issues[0].Level != "" {
+		t.Errorf("level = %q, want it left for the tool table to stamp", issues[0].Level)
+	}
+	// A gosec that could not run is a broken check, not a security
+	// finding, so that line sets its own level.
+	if broken := parseGosec("/proj", []byte("not json"), []byte("gosec: boom"), 1); len(broken) != 1 || broken[0].Level != LevelWarning {
+		t.Errorf("failed gosec run = %+v, want one warning", broken)
 	}
 	if issues := parseGosec("/proj", []byte(`{"Issues":[]}`), nil, 0); len(issues) != 0 {
 		t.Errorf("clean gosec run produced issues: %+v", issues)
@@ -155,8 +201,43 @@ func TestParseGovulncheck(t *testing.T) {
 			t.Errorf("detail missing %q: %s", want, issues[0].Detail)
 		}
 	}
-	if !issues[0].Security {
-		t.Error("govulncheck findings must be marked as security findings")
+	if issues[0].Level != "" {
+		t.Errorf("level = %q, want it left for the tool table to stamp", issues[0].Level)
+	}
+}
+
+// TestDefaultToolLevels pins how each tool's findings are reported:
+// security scanners at SECURITY, the correctness tools at WARNING, and
+// the best-effort advice at ISSUE.
+func TestDefaultToolLevels(t *testing.T) {
+	want := map[string]Level{
+		"gofmt":       LevelWarning,
+		"vet":         LevelWarning,
+		"gofix":       LevelIssue,
+		"staticcheck": LevelWarning,
+		"errcheck":    LevelWarning,
+		"revive":      LevelIssue,
+		"gosec":       LevelSecurity,
+		"govulncheck": LevelSecurity,
+		"test":        LevelWarning,
+	}
+	tools := DefaultTools()
+	if len(tools) != len(want) {
+		t.Errorf("tool count = %d, want %d: a new tool needs a level here", len(tools), len(want))
+	}
+	for _, tool := range tools {
+		if tool.Level != want[tool.Name] {
+			t.Errorf("%s level = %q, want %q", tool.Name, tool.Level, want[tool.Name])
+		}
+	}
+}
+
+// TestAtLevelKeepsExplicitLevel checks the stamping rule: a parser that
+// set a level keeps it, everything else takes the tool's.
+func TestAtLevelKeepsExplicitLevel(t *testing.T) {
+	issues := atLevel([]Issue{{Tool: "gosec"}, {Tool: "gosec", Level: LevelWarning}}, LevelSecurity)
+	if issues[0].Level != LevelSecurity || issues[1].Level != LevelWarning {
+		t.Errorf("levels = %q, %q; want security, warning", issues[0].Level, issues[1].Level)
 	}
 }
 

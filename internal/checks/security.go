@@ -22,15 +22,16 @@ func parseGosec(dir string, stdout, stderr []byte, exitCode int) []Issue {
 		if exitCode == 0 {
 			return nil
 		}
-		return []Issue{{Tool: "gosec", Detail: firstNonEmptyLine(stderr, stdout)}}
+		// The scanner failing is a broken run to fix, not a security
+		// finding of its own.
+		return []Issue{{Tool: "gosec", Detail: firstNonEmptyLine(stderr, stdout), Level: LevelWarning}}
 	}
 	var issues []Issue
 	for _, gi := range report.Issues {
 		file := strings.TrimPrefix(strings.TrimPrefix(gi.File, dir), "/")
 		issues = append(issues, Issue{
-			Tool:     "gosec",
-			Detail:   fmt.Sprintf("%s (%s): %s [%s:%s]", gi.RuleID, gi.Severity, gi.Details, file, gi.Line),
-			Security: true,
+			Tool:   "gosec",
+			Detail: fmt.Sprintf("%s (%s): %s [%s:%s]", gi.RuleID, gi.Severity, gi.Details, file, gi.Line),
 		})
 	}
 	return issues
@@ -59,10 +60,10 @@ func parseGovulncheck(_ string, stdout, stderr []byte, exitCode int) []Issue {
 			detail += ", fixed in " + v.fixed
 		}
 		detail += ")"
-		issues = append(issues, Issue{Tool: "govulncheck", Detail: detail, Security: true})
+		issues = append(issues, Issue{Tool: "govulncheck", Detail: detail})
 	}
 	if len(issues) == 0 && exitCode != 0 && len(bytes.TrimSpace(stdout)) == 0 {
-		return []Issue{{Tool: "govulncheck", Detail: firstNonEmptyLine(stderr)}}
+		return []Issue{{Tool: "govulncheck", Detail: firstNonEmptyLine(stderr), Level: LevelWarning}}
 	}
 	return issues
 }

@@ -148,11 +148,11 @@ func TestGainIssuesSeverity(t *testing.T) {
 		{pkg: "p", capability: "NETWORK", via: "net/http.Get"},
 		{pkg: "p", capability: "REFLECT"},
 	})
-	if !issues[0].Security {
-		t.Error("gained NETWORK must be a security finding")
+	if issues[0].Level != LevelSecurity {
+		t.Errorf("gained NETWORK must be a security finding, got %q", issues[0].Level)
 	}
-	if issues[1].Security {
-		t.Error("gained REFLECT must not be a security finding")
+	if issues[1].Level != LevelWarning {
+		t.Errorf("gained REFLECT must be a warning, got %q", issues[1].Level)
 	}
 	if !strings.Contains(issues[0].Detail, "gained NETWORK") || !strings.Contains(issues[0].Detail, "net/http.Get") {
 		t.Errorf("detail = %q", issues[0].Detail)
@@ -170,8 +170,8 @@ func TestCapslockFirstRunRecordsBaseline(t *testing.T) {
 	}
 	var highRisk int
 	for _, is := range issues {
-		if is.Security {
-			t.Errorf("first-run issue must not be Security: %+v", is)
+		if is.Level != LevelWarning {
+			t.Errorf("first-run entry must be a warning, not %q: %+v", is.Level, is)
 		}
 		if strings.Contains(is.Detail, "uses NETWORK") || strings.Contains(is.Detail, "uses EXEC") {
 			highRisk++
@@ -239,8 +239,8 @@ func TestCapslockReportsGainedCapability(t *testing.T) {
 	if len(gained) != 1 || !strings.Contains(gained[0].Detail, "gained NETWORK") {
 		t.Fatalf("want exactly a gained-NETWORK finding, got %+v", issues)
 	}
-	if !gained[0].Security {
-		t.Error("a gained high-risk capability must be a security finding")
+	if gained[0].Level != LevelSecurity {
+		t.Errorf("a gained high-risk capability must be a security finding, got %q", gained[0].Level)
 	}
 
 	// The baseline must NOT have been silently updated: the alert has to
@@ -292,7 +292,7 @@ func TestCapslockUpdateBaselinesAcceptsGains(t *testing.T) {
 
 	issues, notes := Capslock(context.Background(), dir, true)
 	for _, is := range issues {
-		if strings.Contains(is.Detail, "gained") || is.Security {
+		if strings.Contains(is.Detail, "gained") || is.Level == LevelSecurity {
 			t.Errorf("update run must not report gains: %+v", is)
 		}
 	}

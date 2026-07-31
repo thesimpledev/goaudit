@@ -32,22 +32,39 @@ func New(path string, iocCount int, notes []string, findings []match.Finding, is
 	sortedIssues := make([]checks.Issue, len(issues))
 	copy(sortedIssues, issues)
 	sort.SliceStable(sortedIssues, func(i, j int) bool {
-		return sortedIssues[i].Security && !sortedIssues[j].Security
+		return levelRank(sortedIssues[i].Level) > levelRank(sortedIssues[j].Level)
 	})
 	return &Report{Path: path, IOCCount: iocCount, Notes: notes, Findings: sorted, Issues: sortedIssues}
 }
 
-// IssueCounts splits the check-suite entries into security findings
-// (gosec, govulncheck) and ordinary issues.
-func (r *Report) IssueCounts() (security, issues int) {
+// levelRank orders check entries worst-first. An entry with no level set
+// counts as a warning, matching the default the check suite stamps on.
+func levelRank(l checks.Level) int {
+	switch l {
+	case checks.LevelSecurity:
+		return 2
+	case checks.LevelIssue:
+		return 0
+	default:
+		return 1
+	}
+}
+
+// IssueCounts splits the check-suite entries by level: security findings
+// (gosec, govulncheck, capability gains), warnings from the correctness
+// tools, and best-effort issues.
+func (r *Report) IssueCounts() (security, warnings, issues int) {
 	for _, is := range r.Issues {
-		if is.Security {
+		switch is.Level {
+		case checks.LevelSecurity:
 			security++
-		} else {
+		case checks.LevelIssue:
 			issues++
+		default:
+			warnings++
 		}
 	}
-	return security, issues
+	return security, warnings, issues
 }
 
 // Counts returns how many findings are flagged, warnings, and clean.

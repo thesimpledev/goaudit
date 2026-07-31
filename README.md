@@ -21,13 +21,14 @@ note: OSV malicious-package feed cache fresh (2h0m0s old)
    FLAGGED  github.com/evil/pkg@v1.2.3
             exact match in IOC list
    SECURITY [govulncheck] GO-2026-5004: SQL injection in github.com/jackc/pgx (v5.8.0, fixed in v5.9.2)
-   ISSUE    [errcheck] cmd/server/main.go:29:16:  defer ln.Close()
-   result: 1 flagged, 0 warning(s), 1 security finding(s), 1 issue(s), 41 clean
+   WARNING  [errcheck] cmd/server/main.go:29:16:  defer ln.Close()
+   ISSUE    [revive] internal/audit/run.go:41:1: function run has cognitive complexity 22
+   result: 1 flagged, 1 warning(s), 1 security finding(s), 1 issue(s), 41 clean
 
 ── you/cli-tool (/home/you/projects/cli-tool)
    result: all 12 modules clean, all checks passed
 
-overall: 93 projects, 1437 modules checked | 1 flagged, 0 warning(s), 1 security finding(s), 1 issue(s), 0 failed
+overall: 93 projects, 1437 modules checked | 1 flagged, 1 warning(s), 1 security finding(s), 1 issue(s), 0 failed
 ```
 
 Standard library only — no dependencies. No configuration: the threat
@@ -66,6 +67,18 @@ go install golang.org/x/vuln/cmd/govulncheck@latest
 go install github.com/google/capslock/cmd/capslock@latest
 ```
 
+## Claude Code skill
+
+`skills/goaudit/SKILL.md` is a [Claude Code](https://claude.com/claude-code)
+skill covering how to run goaudit and how to read what it reports.
+Copy the folder into your skills directory and Claude picks it up on
+its own when a Go project needs auditing:
+
+```sh
+cp -r skills/goaudit ~/.claude/skills/          # available everywhere
+cp -r skills/goaudit /path/to/project/.claude/skills/   # one project only
+```
+
 ## What it checks
 
 **1. Dependency audit** — every module in `go list -m all` (including
@@ -88,11 +101,21 @@ quality/security pipeline, with all tool noise stripped:
 |---|---|
 | `gosec` | `SECURITY` — each finding with rule ID and severity |
 | `govulncheck` | `SECURITY` — each known CVE whose vulnerable code is actually reached |
-| `capslock` | `SECURITY` — a dependency *gained* a high-risk capability since your baseline; `ISSUE` for the rest (see [capability baselines](#capability-baselines-capslock)) |
-| `gofmt -l` | `ISSUE` — files needing formatting (list only) |
+| `capslock` | `SECURITY` — a dependency *gained* a high-risk capability since your baseline; `WARNING` for the rest (see [capability baselines](#capability-baselines-capslock)) |
+| `gofmt -l` | `WARNING` — files needing formatting (list only) |
+| `go vet`, `errcheck` | `WARNING` — one line per diagnostic |
+| `staticcheck` | `WARNING` for its `SA` bug checks; `ISSUE` for the simplification (`S1`), style (`ST1`), quickfix (`QF`) and unused (`U`) checks |
+| `go test -race -vet=all -shuffle=on -count=1 -timeout=30s` | `WARNING` — failing tests, build failures, data races |
+| `revive` | `ISSUE` — one line per diagnostic |
 | `go fix -diff` | `ISSUE` — one summary line counting files with modernizations available (Go 1.26+; suggestions are never applied) |
-| `go vet`, `staticcheck`, `errcheck`, `revive` | `ISSUE` — one line per diagnostic |
-| `go test -race -vet=all -shuffle=on -count=1 -timeout=30s` | `ISSUE` — failing tests, build failures, data races |
+
+The split is about what the finding asks of you. `WARNING` is a defect
+with a definite fix: an unchecked error, a vet or `SA` diagnostic, a
+failing test, an unformatted file. `ISSUE` is advice you weigh: revive's
+style and complexity rules, staticcheck's style and simplification
+checks, and the modernizations `go fix` offers. A staticcheck line whose
+check code cannot be read stays a `WARNING`, so nothing is quietly
+demoted.
 
 The text report shows at most 10 lines per tool per project, summing
 the rest into one `+N more` line — but the counts in the result line
@@ -111,13 +134,21 @@ skips the whole suite.
 | Level | Meaning | Exit code |
 |---|---|---|
 | `FLAGGED` | known-malicious package | 1, always |
-| `SECURITY` | gosec / govulncheck finding | 2, always |
-| `WARNING` | typosquat heuristics | 2 only with `--fail-on-warn` |
-| `ISSUE` | lint, formatting, failing tests | 2 only with `--fail-on-warn` |
+| `SECURITY` | gosec / govulncheck finding, capability gain | 2, always |
+| `WARNING` | typosquat heuristics; lint, formatting, failing tests | 2, always |
+| `ISSUE` | revive, staticcheck style checks, available modernizations | 2 only with `--fail-on-warn` |
+
+Everything from `WARNING` up has to be dealt with, so everything from
+`WARNING` up fails the run on its own. `--fail-on-warn` extends that to
+the best-effort `ISSUE`s and to projects that could not be scanned.
+
+The result line counts both kinds of `WARNING` in one number. Which is
+which is on each line, and in the JSON report's `findings` and `checks`
+arrays (every check entry carries its own `level`).
 
 Exit 3 means the tool itself couldn't run (bad flags, no projects
 found). A single project that can't be scanned (broken `go.mod`)
-appears as an `ERROR` section but never kills the run, and feed
+appears as an `ERROR` section but never kills the run on its own, and feed
 download problems degrade to a warning with the stale cache — never a
 failure. Transient network errors are retried three times with backoff.
 
@@ -134,7 +165,7 @@ goaudit --path . --fail-on-warn   # anything at all fails the gate
 | `--path` | `.` | A project directory, or a parent directory of many projects |
 | `--recursive` | false | Scan every Go project under `--path` (automatic when `--path` has no `go.mod`) |
 | `--local-ioc` | (none) | Extra IOC file applied to every scanned project |
-| `--fail-on-warn` | false | Warnings and issues also fail the run |
+| `--fail-on-warn` | false | Issues and unscannable projects also fail the run (warnings always do) |
 | `--verbose` | false | Include clean modules in the report |
 | `--cli` | false | Show every check finding in the text report instead of 10 lines per tool (the JSON report always has everything) |
 | `--update-baselines` | false | Re-record each project's capslock capability baseline, accepting its current capabilities |
@@ -238,11 +269,11 @@ home.
 - **First run** on a project records `.goaudit-capslock.json`, a
   baseline of every package's capabilities, and lists the high-risk
   ones already present (`EXEC`, `NETWORK`, `SYSTEM_CALLS`,
-  `ARBITRARY_EXECUTION`, `CGO`, `UNSAFE_POINTER`) as `ISSUE`s — an
-  inventory, not an incident.
+  `ARBITRARY_EXECUTION`, `CGO`, `UNSAFE_POINTER`) as `WARNING`s — a
+  list to read once and accept, not an incident.
 - **Later runs** report only capabilities *gained* since the baseline.
   A gained high-risk capability is a `SECURITY` finding and fails the
-  run (exit 2); other gains are `ISSUE`s. The finding names the call
+  run (exit 2); other gains are `WARNING`s. The finding names the call
   responsible: `example.com/pkg gained NETWORK (via net/http.Get) since
   baseline`.
 - **While `go.sum` is unchanged, capslock is skipped entirely** — the

@@ -222,7 +222,8 @@ func capslockVia(path []capslockFunc) string {
 }
 
 // firstRunIssues lists the high-risk capabilities present when a baseline
-// is recorded: an inventory, not an incident, so never Security.
+// is recorded: a report of what the project already has, not an incident,
+// so warnings to read and accept once rather than security findings.
 func firstRunIssues(current map[string]map[string]string) []Issue {
 	var issues []Issue
 	for _, pkg := range sortedCapKeys(current) {
@@ -230,7 +231,7 @@ func firstRunIssues(current map[string]map[string]string) []Issue {
 			if !highRiskCapabilities[name] {
 				continue
 			}
-			issues = append(issues, Issue{Tool: "capslock", Detail: capslockDetail(pkg, "uses", name, current[pkg][name])})
+			issues = append(issues, Issue{Tool: "capslock", Detail: capslockDetail(pkg, "uses", name, current[pkg][name]), Level: LevelWarning})
 		}
 	}
 	return issues
@@ -292,10 +293,14 @@ func lostCount(old map[string][]string, current map[string]map[string]string) in
 func gainIssues(gains []capGain) []Issue {
 	issues := make([]Issue, 0, len(gains))
 	for _, g := range gains {
+		level := LevelWarning
+		if highRiskCapabilities[g.capability] {
+			level = LevelSecurity
+		}
 		issues = append(issues, Issue{
-			Tool:     "capslock",
-			Detail:   capslockDetail(g.pkg, "gained", g.capability, g.via) + " since baseline",
-			Security: highRiskCapabilities[g.capability],
+			Tool:   "capslock",
+			Detail: capslockDetail(g.pkg, "gained", g.capability, g.via) + " since baseline",
+			Level:  level,
 		})
 	}
 	return issues

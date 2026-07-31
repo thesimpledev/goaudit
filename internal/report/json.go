@@ -16,6 +16,9 @@ type jsonFinding struct {
 	Detail  string `json:"detail,omitempty"`
 }
 
+// jsonReport is the single-project report file. Warnings covers both the
+// dependency warnings in findings and the warning-level check entries;
+// which is which is in the findings and checks arrays.
 type jsonReport struct {
 	Path     string         `json:"path"`
 	Scanned  int            `json:"scanned"`
@@ -34,12 +37,12 @@ type jsonReport struct {
 // included only when verbose is true.
 func (r *Report) WriteJSON(w io.Writer, verbose bool) error {
 	flagged, warnings, clean := r.Counts()
-	security, issues := r.IssueCounts()
+	security, checkWarnings, issues := r.IssueCounts()
 	out := jsonReport{
 		Path:     r.Path,
 		Scanned:  flagged + warnings + clean,
 		Flagged:  flagged,
-		Warnings: warnings,
+		Warnings: warnings + checkWarnings,
 		Security: security,
 		Issues:   issues,
 		Clean:    clean,

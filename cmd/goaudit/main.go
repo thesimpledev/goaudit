@@ -12,8 +12,8 @@
 // report file into the scanned directory.
 //
 // Exit codes: 0 clean, 1 flagged (malicious) match, 2 security findings
-// from gosec/govulncheck (always) or warnings/lint issues (with
-// --fail-on-warn), 3 operational error.
+// or warnings (always) and best-effort issues (with --fail-on-warn), 3
+// operational error.
 package main
 
 import (
@@ -120,7 +120,7 @@ func newFlagSet(opts *options, w io.Writer) *flag.FlagSet {
 	fs.StringVar(&opts.path, "path", ".", "project directory, or a parent directory of many projects")
 	fs.StringVar(&opts.localIOC, "local-ioc", "", "extra IOC file applied to every scanned project (each project's "+localIOCName+" is always auto-detected)")
 	fs.BoolVar(&opts.recursive, "recursive", false, "scan every Go project found under --path (automatic when --path has no go.mod)")
-	fs.BoolVar(&opts.failOnWarn, "fail-on-warn", false, "exit 2 when warnings are found")
+	fs.BoolVar(&opts.failOnWarn, "fail-on-warn", false, "exit 2 for issues and unscannable projects too (warnings always fail the run)")
 	fs.BoolVar(&opts.verbose, "verbose", false, "include clean modules in the report")
 	fs.BoolVar(&opts.cli, "cli", false, "show every check finding in the text report instead of 10 lines per tool")
 	fs.BoolVar(&opts.updateBaselines, "update-baselines", false, "re-record each project's capslock capability baseline, accepting its current capabilities")
@@ -262,19 +262,19 @@ func (a *app) scan(ctx context.Context) int {
 	}
 
 	flagged, warnings, _ := rep.Counts()
-	security, issueCount := rep.IssueCounts()
-	return exitFor(flagged, security, warnings+issueCount, a.opts.failOnWarn)
+	security, checkWarnings, issueCount := rep.IssueCounts()
+	return exitFor(flagged, security+warnings+checkWarnings, issueCount, a.opts.failOnWarn)
 }
 
 // exitFor folds counts into the process exit code. A malicious match
-// dominates; security findings (gosec, govulncheck) always fail the run;
-// warnings, lint/test issues, and unscannable projects fail only with
-// --fail-on-warn.
-func exitFor(flagged, security, soft int, failOnWarn bool) int {
+// dominates; security findings and warnings — a typosquat suspect, or a
+// defect with a definite fix — always fail the run; best-effort issues
+// and unscannable projects fail only with --fail-on-warn.
+func exitFor(flagged, mustFix, soft int, failOnWarn bool) int {
 	switch {
 	case flagged > 0:
 		return exitFlagged
-	case security > 0:
+	case mustFix > 0:
 		return exitWarnings
 	case soft > 0 && failOnWarn:
 		return exitWarnings

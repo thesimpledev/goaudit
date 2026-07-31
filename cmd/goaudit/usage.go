@@ -30,12 +30,23 @@ Flags:
 `
 
 const usageFooter = `
+Report levels:
+
+  FLAGGED   a known-malicious package
+  SECURITY  gosec, govulncheck, or a dependency that gained a
+            high-risk capability since its baseline
+  WARNING   a typosquat suspect, or a defect with a definite fix:
+            vet, staticcheck's SA checks, errcheck, gofmt, a failing
+            test
+  ISSUE     advice to weigh: revive, available modernizations, and
+            staticcheck's style and simplification checks
+
 Exit codes:
 
   0  clean
   1  known-malicious package found
-  2  security findings (gosec, govulncheck, capslock gains) — always;
-     warnings and lint/test issues too when --fail-on-warn is set
+  2  security findings and warnings — always; issues and projects that
+     could not be scanned too when --fail-on-warn is set
   3  goaudit itself could not run (bad flags, no projects found)
 
 Environment:
@@ -53,7 +64,7 @@ Examples:
 
   goaudit                            audit the current project
   goaudit --path ~/projects          audit every Go project under ~/projects
-  goaudit --path . --fail-on-warn    CI gate: any finding fails the run
+  goaudit --path . --fail-on-warn    CI gate: any finding at all fails
   goaudit --cli                      show every finding, no per-tool cap
   goaudit --update-baselines         accept current capslock capabilities
 

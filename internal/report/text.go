@@ -49,53 +49,62 @@ func (r *Report) WriteText(w io.Writer, verbose, full bool) error {
 		p.printf("\n")
 	}
 
-	security, issues := r.IssueCounts()
-	if flagged == 0 && warnings == 0 && security == 0 && issues == 0 {
+	security, checkWarnings, issues := r.IssueCounts()
+	if flagged == 0 && warnings == 0 && security == 0 && checkWarnings == 0 && issues == 0 {
 		p.printf("result: all %d modules clean, all checks passed\n", total)
 	} else {
 		p.printf("result: %d flagged, %d warning(s), %d security finding(s), %d issue(s), %d clean\n",
-			flagged, warnings, security, issues, clean)
+			flagged, warnings+checkWarnings, security, issues, clean)
 	}
 	return p.err
 }
 
 // writeIssues prints one line per check-suite entry with the given
-// indent — security findings labeled SECURITY, the rest ISSUE — and
-// returns how many lines were printed. Unless full is set, each tool
-// prints at most maxIssuesPerTool lines; the rest collapse into one
-// "+N more" line per tool after the list.
+// indent, labeled by level, and returns how many lines were printed.
+// Unless full is set, each tool prints at most maxIssuesPerTool lines;
+// the rest collapse into one "+N more" line per tool after the list,
+// carrying the worst level among the lines it stands for.
 func writeIssues(p *printer, issues []checks.Issue, indent string, full bool) int {
 	shown := 0
 	printed := map[string]int{}
 	hidden := map[string]int{}
-	hiddenSecurity := map[string]bool{}
+	hiddenLevel := map[string]checks.Level{}
 	var hiddenOrder []string
 	for _, is := range issues {
 		if !full && printed[is.Tool] >= maxIssuesPerTool {
 			if hidden[is.Tool] == 0 {
 				hiddenOrder = append(hiddenOrder, is.Tool)
+				hiddenLevel[is.Tool] = is.Level
 			}
 			hidden[is.Tool]++
-			hiddenSecurity[is.Tool] = hiddenSecurity[is.Tool] || is.Security
+			if levelRank(is.Level) > levelRank(hiddenLevel[is.Tool]) {
+				hiddenLevel[is.Tool] = is.Level
+			}
 			continue
 		}
 		printed[is.Tool]++
 		shown++
-		p.printf("%s%-8s [%s] %s\n", indent, issueLabel(is.Security), is.Tool, is.Detail)
+		p.printf("%s%-8s [%s] %s\n", indent, issueLabel(is.Level), is.Tool, is.Detail)
 	}
 	for _, tool := range hiddenOrder {
 		shown++
 		p.printf("%s%-8s [%s] (+%d more %s findings; rerun with --cli or see the JSON report)\n",
-			indent, issueLabel(hiddenSecurity[tool]), tool, hidden[tool], tool)
+			indent, issueLabel(hiddenLevel[tool]), tool, hidden[tool], tool)
 	}
 	return shown
 }
 
-func issueLabel(security bool) string {
-	if security {
+// issueLabel is the column shown for a check entry. An entry with no
+// level set is labeled WARNING, matching how it is counted.
+func issueLabel(l checks.Level) string {
+	switch l {
+	case checks.LevelSecurity:
 		return "SECURITY"
+	case checks.LevelIssue:
+		return "ISSUE"
+	default:
+		return "WARNING"
 	}
-	return "ISSUE"
 }
 
 // writeFindings prints one line per finding with the given indent,

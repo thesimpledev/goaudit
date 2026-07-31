@@ -125,14 +125,16 @@ func TestRunCleanExitsZero(t *testing.T) {
 	}
 }
 
-func TestRunFailOnWarnTyposquat(t *testing.T) {
+// TestRunTyposquatFailsRun covers the gate on warnings: they fail the
+// run on their own, with or without --fail-on-warn.
+func TestRunTyposquatFailsRun(t *testing.T) {
 	fakeFeed(t, emptyFeed)
 	proj := setupVictim(t, "github.com/strechr/testify")
 
 	var out, errOut bytes.Buffer
 	code := run([]string{"--path", proj}, &out, &errOut)
-	if code != exitClean {
-		t.Fatalf("without --fail-on-warn: exit = %d, want %d\nstderr: %s", code, exitClean, errOut.String())
+	if code != exitWarnings {
+		t.Fatalf("without --fail-on-warn: exit = %d, want %d\nstderr: %s", code, exitWarnings, errOut.String())
 	}
 	if !strings.Contains(out.String(), "WARNING") {
 		t.Errorf("typosquat warning missing:\n%s", out.String())
@@ -322,19 +324,19 @@ func TestReportWriteFailureWarnsNotFails(t *testing.T) {
 
 func TestExitFor(t *testing.T) {
 	tests := []struct {
-		name                    string
-		flagged, security, soft int
-		failOnWarn              bool
-		want                    int
+		name                   string
+		flagged, mustFix, soft int
+		failOnWarn             bool
+		want                   int
 	}{
 		{"clean", 0, 0, 0, false, exitClean},
 		{"flagged dominates", 1, 5, 5, false, exitFlagged},
-		{"security fails without fail-on-warn", 0, 1, 0, false, exitWarnings},
-		{"soft passes by default", 0, 0, 7, false, exitClean},
-		{"soft fails with fail-on-warn", 0, 0, 7, true, exitWarnings},
+		{"warnings fail without fail-on-warn", 0, 1, 0, false, exitWarnings},
+		{"issues pass by default", 0, 0, 7, false, exitClean},
+		{"issues fail with fail-on-warn", 0, 0, 7, true, exitWarnings},
 	}
 	for _, tt := range tests {
-		if got := exitFor(tt.flagged, tt.security, tt.soft, tt.failOnWarn); got != tt.want {
+		if got := exitFor(tt.flagged, tt.mustFix, tt.soft, tt.failOnWarn); got != tt.want {
 			t.Errorf("%s: exitFor = %d, want %d", tt.name, got, tt.want)
 		}
 	}

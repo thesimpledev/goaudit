@@ -41,7 +41,8 @@ func NewMulti(root string, iocCount int, notes []string, projects []ProjectResul
 }
 
 // TotalCounts aggregates results across every project in a multi-project
-// audit.
+// audit. Warnings covers both dependency warnings and warning-level check
+// entries, so Scanned carries the module count separately.
 type TotalCounts struct {
 	Flagged  int
 	Warnings int
@@ -49,6 +50,7 @@ type TotalCounts struct {
 	Issues   int
 	Clean    int
 	Failed   int
+	Scanned  int
 }
 
 // Totals sums finding and issue counts across all projects.
@@ -60,12 +62,13 @@ func (m *MultiReport) Totals() TotalCounts {
 			continue
 		}
 		flagged, warnings, clean := p.Report.Counts()
-		security, issues := p.Report.IssueCounts()
+		security, checkWarnings, issues := p.Report.IssueCounts()
 		t.Flagged += flagged
-		t.Warnings += warnings
+		t.Warnings += warnings + checkWarnings
 		t.Security += security
 		t.Issues += issues
 		t.Clean += clean
+		t.Scanned += flagged + warnings + clean
 	}
 	return t
 }
@@ -85,7 +88,7 @@ func (m *MultiReport) WriteText(w io.Writer, verbose, full bool) error {
 	}
 	t := m.Totals()
 	p.printf("\noverall: %d projects, %d modules checked | %d flagged, %d warning(s), %d security finding(s), %d issue(s), %d failed\n",
-		len(m.Projects), t.Flagged+t.Warnings+t.Clean, t.Flagged, t.Warnings, t.Security, t.Issues, t.Failed)
+		len(m.Projects), t.Scanned, t.Flagged, t.Warnings, t.Security, t.Issues, t.Failed)
 	return p.err
 }
 
@@ -105,12 +108,12 @@ func writeProjectSection(p *printer, pr ProjectResult, verbose, full bool) {
 	writeFindings(p, pr.Report.Findings, verbose, "   ")
 	writeIssues(p, pr.Report.Issues, "   ", full)
 	flagged, warnings, clean := pr.Report.Counts()
-	security, issues := pr.Report.IssueCounts()
-	if flagged == 0 && warnings == 0 && security == 0 && issues == 0 {
+	security, checkWarnings, issues := pr.Report.IssueCounts()
+	if flagged == 0 && warnings == 0 && security == 0 && checkWarnings == 0 && issues == 0 {
 		p.printf("   result: all %d modules clean, all checks passed\n", clean)
 	} else {
 		p.printf("   result: %d flagged, %d warning(s), %d security finding(s), %d issue(s), %d clean\n",
-			flagged, warnings, security, issues, clean)
+			flagged, warnings+checkWarnings, security, issues, clean)
 	}
 }
 
@@ -131,6 +134,7 @@ type jsonProject struct {
 
 type jsonTotals struct {
 	Projects int `json:"projects"`
+	Scanned  int `json:"scanned"`
 	Flagged  int `json:"flagged"`
 	Warnings int `json:"warnings"`
 	Security int `json:"security"`
@@ -162,6 +166,7 @@ func (m *MultiReport) WriteJSON(w io.Writer, verbose bool) error {
 	t := m.Totals()
 	out.Totals = jsonTotals{
 		Projects: len(m.Projects),
+		Scanned:  t.Scanned,
 		Flagged:  t.Flagged,
 		Warnings: t.Warnings,
 		Security: t.Security,
@@ -181,10 +186,10 @@ func jsonProjectFrom(pr ProjectResult, verbose bool) jsonProject {
 		return jp
 	}
 	flagged, warnings, clean := pr.Report.Counts()
-	security, issues := pr.Report.IssueCounts()
+	security, checkWarnings, issues := pr.Report.IssueCounts()
 	jp.Scanned = flagged + warnings + clean
 	jp.Flagged = flagged
-	jp.Warnings = warnings
+	jp.Warnings = warnings + checkWarnings
 	jp.Security = security
 	jp.Issues = issues
 	jp.Clean = clean

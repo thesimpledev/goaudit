@@ -15,21 +15,37 @@ import (
 	"sync"
 )
 
-// Issue is one problem reported by one tool. Security marks findings from
-// the security scanners (gosec, govulncheck), which rank above ordinary
-// lint and test issues.
+// Level ranks how severely a check finding is reported. Security is for
+// the security scanners (gosec, govulncheck, and a dependency gaining a
+// high-risk capability). Warning is for the correctness tools, whose
+// findings are defects to fix: vet, staticcheck's bug checks, errcheck,
+// gofmt, go test, and the capability report. Issue is for the
+// best-effort advice: revive, go fix's modernizations, and
+// staticcheck's style and simplification checks.
+type Level string
+
+const (
+	LevelSecurity Level = "security"
+	LevelWarning  Level = "warning"
+	LevelIssue    Level = "issue"
+)
+
+// Issue is one problem reported by one tool, at the level its tool
+// reports at.
 type Issue struct {
-	Tool     string `json:"tool"`
-	Detail   string `json:"detail"`
-	Security bool   `json:"security,omitempty"`
+	Tool   string `json:"tool"`
+	Detail string `json:"detail"`
+	Level  Level  `json:"level"`
 }
 
-// Tool describes one external check: the command to run and how to turn
-// its output into issues. When Resolve is set it computes the argv for a
-// specific project directory; returning no argv skips the tool for that
-// project with the returned note.
+// Tool describes one external check: the command to run, the level its
+// findings are reported at, and how to turn its output into issues. When
+// Resolve is set it computes the argv for a specific project directory;
+// returning no argv skips the tool for that project with the returned
+// note.
 type Tool struct {
 	Name    string
+	Level   Level
 	Args    []string
 	Resolve func(dir string) (args []string, note string)
 	Parse   func(dir string, stdout, stderr []byte, exitCode int) []Issue
@@ -42,17 +58,17 @@ type Tool struct {
 // artifacts are not collected.
 func DefaultTools() []Tool {
 	return []Tool{
-		{Name: "gofmt", Args: []string{"gofmt", "-l", "."}, Parse: parseGofmt},
-		{Name: "vet", Args: []string{"go", "vet", "./..."}, Parse: lineParser("vet", false)},
-		{Name: "gofix", Resolve: gofixArgs, Parse: parseGofix},
-		{Name: "staticcheck", Args: []string{"staticcheck", "./..."}, Parse: lineParser("staticcheck", false)},
-		{Name: "errcheck", Args: []string{"errcheck", "./..."}, Parse: lineParser("errcheck", false)},
+		{Name: "gofmt", Level: LevelWarning, Args: []string{"gofmt", "-l", "."}, Parse: parseGofmt},
+		{Name: "vet", Level: LevelWarning, Args: []string{"go", "vet", "./..."}, Parse: lineParser("vet", false)},
+		{Name: "gofix", Level: LevelIssue, Resolve: gofixArgs, Parse: parseGofix},
+		{Name: "staticcheck", Level: LevelWarning, Args: []string{"staticcheck", "./..."}, Parse: parseStaticcheck},
+		{Name: "errcheck", Level: LevelWarning, Args: []string{"errcheck", "./..."}, Parse: lineParser("errcheck", false)},
 		// revive exits 0 even when it prints warnings, so its output is
 		// parsed regardless of exit code.
-		{Name: "revive", Resolve: reviveArgs, Parse: lineParser("revive", true)},
-		{Name: "gosec", Args: []string{"gosec", "-quiet", "-fmt=json", "./..."}, Parse: parseGosec},
-		{Name: "govulncheck", Args: []string{"govulncheck", "-json", "./..."}, Parse: parseGovulncheck},
-		{Name: "test", Args: []string{"go", "test", "./...", "-race", "-vet=all", "-shuffle=on", "-count=1", "-timeout=30s"}, Parse: parseGoTest},
+		{Name: "revive", Level: LevelIssue, Resolve: reviveArgs, Parse: lineParser("revive", true)},
+		{Name: "gosec", Level: LevelSecurity, Args: []string{"gosec", "-quiet", "-fmt=json", "./..."}, Parse: parseGosec},
+		{Name: "govulncheck", Level: LevelSecurity, Args: []string{"govulncheck", "-json", "./..."}, Parse: parseGovulncheck},
+		{Name: "test", Level: LevelWarning, Args: []string{"go", "test", "./...", "-race", "-vet=all", "-shuffle=on", "-count=1", "-timeout=30s"}, Parse: parseGoTest},
 	}
 }
 
@@ -173,11 +189,32 @@ func runTool(ctx context.Context, dir string, tool Tool) []Issue {
 	if err := cmd.Run(); err != nil {
 		var exitErr *exec.ExitError
 		if !errors.As(err, &exitErr) {
-			return []Issue{{Tool: tool.Name, Detail: "could not run: " + err.Error()}}
+			return []Issue{{Tool: tool.Name, Detail: "could not run: " + err.Error(), Level: LevelWarning}}
 		}
 		exitCode = exitErr.ExitCode()
 	}
-	return tool.Parse(dir, stdout.Bytes(), stderr.Bytes(), exitCode)
+	return atLevel(tool.Parse(dir, stdout.Bytes(), stderr.Bytes(), exitCode), tool.level())
+}
+
+// level is the tool's reporting level, defaulting to Warning so a tool
+// added without one is never quietly demoted below a real defect.
+func (t Tool) level() Level {
+	if t.Level == "" {
+		return LevelWarning
+	}
+	return t.Level
+}
+
+// atLevel stamps the tool's level onto every issue its parser left
+// unset, so a parser only has to say so when one of its findings belongs
+// somewhere other than its tool's usual level.
+func atLevel(issues []Issue, level Level) []Issue {
+	for i := range issues {
+		if issues[i].Level == "" {
+			issues[i].Level = level
+		}
+	}
+	return issues
 }
 
 // listPackages splits the project's packages into those that compile on
@@ -258,6 +295,55 @@ func lineParser(tool string, evenOnSuccess bool) func(string, []byte, []byte, in
 		}
 		return issues
 	}
+}
+
+// parseStaticcheck splits staticcheck's output by the check that
+// produced each line. Its SA checks find bugs — a nil dereference, a
+// value that is never used, a printf format that cannot match its
+// arguments — so they report as warnings. The simplification (S1),
+// style (ST1), quickfix (QF), and unused-code (U) checks are advice, so
+// they report as issues. A line whose check code cannot be read keeps
+// the tool's own level, so an unrecognized diagnostic is never demoted.
+func parseStaticcheck(dir string, stdout, stderr []byte, exitCode int) []Issue {
+	issues := lineParser("staticcheck", false)(dir, stdout, stderr, exitCode)
+	for i, is := range issues {
+		switch code := trailingCheckCode(is.Detail); {
+		case code == "":
+		case strings.HasPrefix(code, "SA"):
+			issues[i].Level = LevelWarning
+		default:
+			issues[i].Level = LevelIssue
+		}
+	}
+	return issues
+}
+
+// trailingCheckCode returns the check code a staticcheck diagnostic ends
+// with — "main.go:10:2: this value is never used (SA4006)" gives
+// "SA4006" — or "" when the line ends in something else.
+func trailingCheckCode(detail string) string {
+	if !strings.HasSuffix(detail, ")") {
+		return ""
+	}
+	open := strings.LastIndexByte(detail, '(')
+	if open < 0 {
+		return ""
+	}
+	code := detail[open+1 : len(detail)-1]
+	letters := 0
+	for letters < len(code) && code[letters] >= 'A' && code[letters] <= 'Z' {
+		letters++
+	}
+	digits := code[letters:]
+	if letters == 0 || digits == "" {
+		return ""
+	}
+	for i := range digits {
+		if digits[i] < '0' || digits[i] > '9' {
+			return ""
+		}
+	}
+	return code
 }
 
 // parseGofmt turns `gofmt -l .` output (one unformatted file per line)

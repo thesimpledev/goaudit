@@ -111,11 +111,12 @@ func (a *app) scanProject(ctx context.Context, dir string, base *ioc.Set) report
 }
 
 // multiExitCode folds the combined results into one CI exit code via
-// exitFor: malware → 1, security findings → 2 always; warnings, lint/test
-// issues, and unscannable projects → 2 only with --fail-on-warn.
+// exitFor: malware → 1, security findings and warnings → 2 always;
+// best-effort issues and unscannable projects → 2 only with
+// --fail-on-warn.
 func multiExitCode(rep *report.MultiReport, failOnWarn bool) int {
 	t := rep.Totals()
-	return exitFor(t.Flagged, t.Security, t.Warnings+t.Issues+t.Failed, failOnWarn)
+	return exitFor(t.Flagged, t.Security+t.Warnings, t.Issues+t.Failed, failOnWarn)
 }
 
 // nameFromModule derives a project's display name: everything after the

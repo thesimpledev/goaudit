@@ -53,13 +53,21 @@ Findings come at four levels:
 |---|---|---|
 | `FLAGGED` | known-malicious package (feed or local IOC match) | 1, always |
 | `SECURITY` | gosec, govulncheck, or a gained high-risk capability | 2, always |
-| `WARNING` | typosquat heuristic | 2 only with `--fail-on-warn` |
-| `ISSUE` | lint, formatting, failing tests, capability inventory | 2 only with `--fail-on-warn` |
+| `WARNING` | typosquat heuristic; vet, staticcheck's `SA` checks, errcheck, gofmt, failing tests, capability report | 2, always |
+| `ISSUE` | revive, staticcheck's `S1`/`ST1`/`QF`/`U` checks, available modernizations from `go fix` | 2 only with `--fail-on-warn` |
+
+A `WARNING` is a defect with a definite fix, and fails the run on its
+own; an `ISSUE` is advice to weigh, and fails only with
+`--fail-on-warn`, which also covers projects that could not be scanned.
+The `result:` line and the JSON `warnings` count add the two kinds of
+warning together — read each entry's own `level` in the JSON `checks`
+array, or the label on each text line, to tell a typosquat suspect from
+a lint finding.
 
 Exit 0 is clean. Exit 3 means goaudit itself could not run (bad flags,
 no projects found), which is a tooling problem, not a finding. A single
-project that cannot be scanned shows up as an `ERROR` section and never
-kills the run.
+project that cannot be scanned shows up as an `ERROR` section and does
+not kill the run unless `--fail-on-warn` is set.
 
 **Parse the JSON, not the text.** The text report caps each tool at 10
 lines per project and sums the rest into a `+N more` line. The counts on
@@ -76,7 +84,7 @@ terminal.
 | `--path` | `.` | A project directory, or a parent directory of many projects |
 | `--recursive` | false | Scan every Go project under `--path` (automatic when `--path` has no `go.mod`) |
 | `--local-ioc` | (none) | Extra IOC file applied to every scanned project |
-| `--fail-on-warn` | false | Warnings and issues also fail the run |
+| `--fail-on-warn` | false | Issues and unscannable projects also fail the run (warnings always do) |
 | `--verbose` | false | Include clean modules in the report |
 | `--cli` | false | Show every finding in the text report |
 | `--update-baselines` | false | Re-record capslock baselines, accepting current capabilities |
@@ -103,7 +111,7 @@ meaningful across machines and in code review.
 Later runs report only capabilities gained since the baseline. A gained
 high-risk capability (`EXEC`, `NETWORK`, `SYSTEM_CALLS`,
 `ARBITRARY_EXECUTION`, `CGO`, `UNSAFE_POINTER`) is a `SECURITY` finding
-and fails the run; other gains are `ISSUE`s. A reported gain repeats
+and fails the run; other gains are `WARNING`s. A reported gain repeats
 every run until it is accepted with `--update-baselines`. Do not run
 `--update-baselines` to make a finding go away without first
 establishing why the capability appeared.
@@ -133,8 +141,9 @@ project's own file layers on top.
 goaudit --path . --fail-on-warn
 ```
 
-That makes any finding at all fail the gate. Without `--fail-on-warn`,
-only malicious packages and security findings fail.
+That makes any finding at all fail the gate, down to revive's advice
+and a project that could not be scanned. Without `--fail-on-warn`,
+malicious packages, security findings, and warnings fail.
 
 ## What it never does
 

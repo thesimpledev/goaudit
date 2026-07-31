@@ -71,8 +71,9 @@ func TestWriteTextAllClean(t *testing.T) {
 
 func TestWriteTextIssues(t *testing.T) {
 	issues := []checks.Issue{
-		{Tool: "staticcheck", Detail: "main.go:10:2: unused variable x (U1000)"},
-		{Tool: "govulncheck", Detail: "GO-2026-5856: crypto/tls leak (stdlib@go1.26.4, fixed in go1.26.5)", Security: true},
+		{Tool: "revive", Detail: "checks.go:102:1: function-length", Level: checks.LevelIssue},
+		{Tool: "staticcheck", Detail: "main.go:10:2: unused variable x (U1000)", Level: checks.LevelWarning},
+		{Tool: "govulncheck", Detail: "GO-2026-5856: crypto/tls leak (stdlib@go1.26.4, fixed in go1.26.5)", Level: checks.LevelSecurity},
 	}
 	r := New("/proj", 0, nil, []match.Finding{{Module: "github.com/ok/dep", Status: match.Clean}}, issues)
 	var buf bytes.Buffer
@@ -82,25 +83,48 @@ func TestWriteTextIssues(t *testing.T) {
 	out := buf.String()
 	for _, want := range []string{
 		"SECURITY [govulncheck] GO-2026-5856",
-		"ISSUE    [staticcheck] main.go:10:2",
-		"result: 0 flagged, 0 warning(s), 1 security finding(s), 1 issue(s), 1 clean",
+		"WARNING  [staticcheck] main.go:10:2",
+		"ISSUE    [revive] checks.go:102:1",
+		"result: 0 flagged, 1 warning(s), 1 security finding(s), 1 issue(s), 1 clean",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q:\n%s", want, out)
 		}
 	}
-	if strings.Index(out, "SECURITY") > strings.Index(out, "ISSUE") {
-		t.Errorf("security findings should render before ordinary issues:\n%s", out)
+	if strings.Index(out, "SECURITY") > strings.Index(out, "WARNING") ||
+		strings.Index(out, "WARNING") > strings.Index(out, "ISSUE") {
+		t.Errorf("check entries should render worst-first:\n%s", out)
+	}
+}
+
+// TestWriteTextMergesWarningCounts covers the one number that has to add
+// up across both kinds of warning: typosquat findings and check entries.
+func TestWriteTextMergesWarningCounts(t *testing.T) {
+	issues := []checks.Issue{{Tool: "errcheck", Detail: "main.go:5:2: unchecked error", Level: checks.LevelWarning}}
+	r := New("/proj", 0, nil, testFindings(), issues)
+	var buf bytes.Buffer
+	if err := r.WriteText(&buf, false, false); err != nil {
+		t.Fatalf("WriteText: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "modules scanned: 3") {
+		t.Errorf("check warnings must not inflate the module count:\n%s", out)
+	}
+	if !strings.Contains(out, "result: 1 flagged, 2 warning(s), 0 security finding(s), 0 issue(s), 1 clean") {
+		t.Errorf("warning count should cover the typosquat and the errcheck entry:\n%s", out)
 	}
 }
 
 func manyIssues() []checks.Issue {
 	var issues []checks.Issue
 	for range 25 {
-		issues = append(issues, checks.Issue{Tool: "revive", Detail: "x"})
+		issues = append(issues, checks.Issue{Tool: "revive", Detail: "x", Level: checks.LevelIssue})
 	}
 	for range 12 {
-		issues = append(issues, checks.Issue{Tool: "gosec", Detail: "y", Security: true})
+		issues = append(issues, checks.Issue{Tool: "gosec", Detail: "y", Level: checks.LevelSecurity})
+	}
+	for range 3 {
+		issues = append(issues, checks.Issue{Tool: "errcheck", Detail: "z", Level: checks.LevelWarning})
 	}
 	return issues
 }
@@ -121,7 +145,7 @@ func TestWriteTextCapsPerTool(t *testing.T) {
 	if !strings.Contains(out, "SECURITY [gosec] (+2 more gosec findings") {
 		t.Errorf("suppressed security findings should keep the SECURITY label:\n%s", out)
 	}
-	if !strings.Contains(out, "result: 0 flagged, 0 warning(s), 12 security finding(s), 25 issue(s), 0 clean") {
+	if !strings.Contains(out, "result: 0 flagged, 3 warning(s), 12 security finding(s), 25 issue(s), 0 clean") {
 		t.Errorf("result line must count every finding, not just the shown lines:\n%s", out)
 	}
 }
@@ -148,6 +172,7 @@ func TestWriteJSONKeepsAllIssues(t *testing.T) {
 		t.Fatalf("WriteJSON: %v", err)
 	}
 	var got struct {
+		Warnings int            `json:"warnings"`
 		Security int            `json:"security"`
 		Issues   int            `json:"issues"`
 		Checks   []checks.Issue `json:"checks"`
@@ -155,11 +180,14 @@ func TestWriteJSONKeepsAllIssues(t *testing.T) {
 	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
 		t.Fatalf("output is not valid JSON: %v\n%s", err, buf.String())
 	}
-	if got.Security != 12 || got.Issues != 25 {
-		t.Errorf("counts = %d security / %d issues, want 12/25", got.Security, got.Issues)
+	if got.Security != 12 || got.Warnings != 3 || got.Issues != 25 {
+		t.Errorf("counts = %d security / %d warnings / %d issues, want 12/3/25", got.Security, got.Warnings, got.Issues)
 	}
-	if len(got.Checks) != 37 {
-		t.Errorf("checks = %d entries, want all 37 (JSON is never capped)", len(got.Checks))
+	if len(got.Checks) != 40 {
+		t.Errorf("checks = %d entries, want all 40 (JSON is never capped)", len(got.Checks))
+	}
+	if got.Checks[0].Level != checks.LevelSecurity {
+		t.Errorf("checks[0] level = %q, want the worst first", got.Checks[0].Level)
 	}
 }
 
