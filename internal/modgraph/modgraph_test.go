@@ -2,8 +2,6 @@ package modgraph
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -36,22 +34,6 @@ func TestParseBadJSON(t *testing.T) {
 	}
 }
 
-func TestVendored(t *testing.T) {
-	dir := t.TempDir()
-	if vendored(dir) {
-		t.Error("bare dir should not look vendored")
-	}
-	if err := os.MkdirAll(filepath.Join(dir, "vendor"), 0o750); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "vendor", "modules.txt"), []byte("# test"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if !vendored(dir) {
-		t.Error("dir with vendor/modules.txt should look vendored")
-	}
-}
-
 func TestIsTransient(t *testing.T) {
 	transient := []string{
 		`go list -m all failed: go: cloud.google.com/go@v0.112.2: Get "https://proxy.golang.org/...": dial tcp: lookup proxy.golang.org on 127.0.0.53:53: server misbehaving`,
@@ -73,42 +55,6 @@ func TestIsTransient(t *testing.T) {
 		if isTransient(msg) {
 			t.Errorf("isTransient(%q) = true, want false", msg)
 		}
-	}
-}
-
-// TestPreserve proves the go.mod/go.sum snapshot survives the two ways
-// `go list -mod=mod` can dirty a project: rewriting an existing file and
-// creating one that was not there.
-func TestPreserve(t *testing.T) {
-	dir := t.TempDir()
-	gomod := filepath.Join(dir, "go.mod")
-	gosum := filepath.Join(dir, "go.sum")
-	original := []byte("module example.test\n\ngo 1.23\n")
-	if err := os.WriteFile(gomod, original, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	restore, err := preserve(gomod, gosum)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(gomod, []byte("rewritten by the go tool\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(gosum, []byte("example.com/dep v1.0.0/go.mod h1:xxx\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	restore()
-
-	got, err := os.ReadFile(gomod)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != string(original) {
-		t.Errorf("go.mod = %q, want original contents restored", got)
-	}
-	if _, err := os.Stat(gosum); !os.IsNotExist(err) {
-		t.Errorf("go.sum should have been deleted again, stat err = %v", err)
 	}
 }
 

@@ -88,6 +88,7 @@ func (a *app) scanAll(ctx context.Context, dirs []string, base *ioc.Set) []repor
 // IOC set plus the project's own IOC file, if present.
 func (a *app) scanProject(ctx context.Context, dir string, base *ioc.Set) report.ProjectResult {
 	res := report.ProjectResult{Name: filepath.Base(dir), Dir: dir}
+	tidyIssues, tidyNotes := a.tidyCheck(ctx, dir)
 	mods, err := modgraph.List(ctx, dir)
 	if err != nil {
 		res.Err = err
@@ -102,8 +103,10 @@ func (a *app) scanProject(ctx context.Context, dir string, base *ioc.Set) report
 	if localNote != "" {
 		notes = append(notes, localNote)
 	}
+	notes = append(notes, tidyNotes...)
 	findings, modulePath := buildFindings(mods, match.NewEngine(set))
 	issues, checkNotes := a.runChecks(ctx, dir)
+	issues = append(tidyIssues, issues...)
 	notes = append(notes, checkNotes...)
 	res.Name = nameFromModule(modulePath, dir)
 	res.Report = report.New(dir, set.Len(), notes, findings, issues)

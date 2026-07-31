@@ -244,6 +244,8 @@ func (a *app) scan(ctx context.Context) int {
 	if set.Len() == 0 {
 		notes = append(notes, "no IOC entries loaded; running typosquat heuristics only")
 	}
+	tidyIssues, tidyNotes := a.tidyCheck(ctx, a.projectDir)
+	notes = append(notes, tidyNotes...)
 	mods, err := modgraph.List(ctx, a.projectDir)
 	if err != nil {
 		return a.fail(err)
@@ -251,6 +253,7 @@ func (a *app) scan(ctx context.Context) int {
 
 	findings, _ := buildFindings(mods, match.NewEngine(set))
 	issues, checkNotes := a.runChecks(ctx, a.projectDir)
+	issues = append(tidyIssues, issues...)
 	notes = append(notes, checkNotes...)
 	rep := report.New(a.projectDir, set.Len(), notes, findings, issues)
 	a.prog.finish()
@@ -281,6 +284,19 @@ func exitFor(flagged, mustFix, soft int, failOnWarn bool) int {
 	default:
 		return exitClean
 	}
+}
+
+// tidyCheck runs the go.mod tidiness check first thing against a
+// project, before its module list is read, unless GOAUDIT_SKIP_CHECKS
+// names "tidy" or disables the whole suite. The check never modifies
+// the project (it uses `go mod tidy -diff`) and skips itself with a
+// note when the module graph cannot be loaded, such as offline.
+func (a *app) tidyCheck(ctx context.Context, dir string) ([]checks.Issue, []string) {
+	skipAll, skip := parseSkipChecks(os.Getenv("GOAUDIT_SKIP_CHECKS"))
+	if skipAll || skip["tidy"] {
+		return nil, nil
+	}
+	return checks.Tidy(ctx, dir)
 }
 
 // runChecks executes the tool suite (vet, gofix, staticcheck, errcheck,
@@ -317,7 +333,7 @@ func parseSkipChecks(value string) (skipAll bool, skip map[string]bool) {
 	if value == "" {
 		return false, nil
 	}
-	known := map[string]bool{"capslock": true}
+	known := map[string]bool{"capslock": true, "tidy": true}
 	for _, t := range checks.DefaultTools() {
 		known[t.Name] = true
 	}

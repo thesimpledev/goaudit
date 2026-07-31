@@ -37,7 +37,8 @@ Report levels:
             high-risk capability since its baseline
   WARNING   a typosquat suspect, or a defect with a definite fix:
             vet, staticcheck's SA checks, errcheck, gofmt, a failing
-            test
+            test, an untidy go.mod (checked with "go mod tidy -diff",
+            never applied)
   ISSUE     advice to weigh: revive, available modernizations, and
             staticcheck's style and simplification checks
 
@@ -52,7 +53,7 @@ Exit codes:
 Environment:
 
   GOAUDIT_SKIP_CHECKS   skip checks by name, comma-separated (for
-                        example "capslock" or "test,capslock"); any
+                        example "tidy" or "test,capslock"); any
                         unknown value skips the whole check suite
   GOAUDIT_FEED_URL      override the Socket PolinRider feed URL;
                         the value "off" disables that feed

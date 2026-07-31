@@ -81,9 +81,13 @@ cp -r skills/goaudit /path/to/project/.claude/skills/   # one project only
 
 ## What it checks
 
-**1. Dependency audit** — every module in `go list -m all` (including
-`replace` targets that point at other modules) is compared against a
-malicious-package feed and typosquat heuristics:
+**1. Dependency audit** — every dependency (including `replace` targets
+that point at other modules) is compared against a malicious-package
+feed and typosquat heuristics. Vendored projects and workspace-vendored
+monorepos (a `go.work` with a shared `vendor/` directory) are read
+straight from `vendor/modules.txt`, which lists exactly the modules
+whose code ships in the build and needs no network; everything else is
+listed with `go list -m all`:
 
 - **FLAGGED — exact IOC match.** The module path appears in the threat
   feed or a local IOC file and the version matches (an entry with no
@@ -102,6 +106,7 @@ quality/security pipeline, with all tool noise stripped:
 | `gosec` | `SECURITY` — each finding with rule ID and severity |
 | `govulncheck` | `SECURITY` — each known CVE whose vulnerable code is actually reached |
 | `capslock` | `SECURITY` — a dependency *gained* a high-risk capability since your baseline; `WARNING` for the rest (see [capability baselines](#capability-baselines-capslock)) |
+| `go mod tidy -diff` | `WARNING` — go.mod/go.sum no longer match what the code imports (runs first, prints only, never applied; skipped with a note when the module graph cannot be loaded, e.g. offline) |
 | `gofmt -l` | `WARNING` — files needing formatting (list only) |
 | `go vet`, `errcheck` | `WARNING` — one line per diagnostic |
 | `staticcheck` | `WARNING` for its `SA` bug checks; `ISSUE` for the simplification (`S1`), style (`ST1`), quickfix (`QF`) and unused (`U`) checks |
@@ -125,7 +130,7 @@ revive uses a
 `revive.toml` found in the scanned project if there is one, then
 `~/.revive.toml`, otherwise it's skipped.
 
-`GOAUDIT_SKIP_CHECKS` skips checks by name (`capslock` or
+`GOAUDIT_SKIP_CHECKS` skips checks by name (`tidy`, `capslock`, or
 `test,capslock`); any other non-empty value — like the traditional `1` —
 skips the whole suite.
 
@@ -135,7 +140,7 @@ skips the whole suite.
 |---|---|---|
 | `FLAGGED` | known-malicious package | 1, always |
 | `SECURITY` | gosec / govulncheck finding, capability gain | 2, always |
-| `WARNING` | typosquat heuristics; lint, formatting, failing tests | 2, always |
+| `WARNING` | typosquat heuristics; lint, formatting, failing tests, untidy go.mod | 2, always |
 | `ISSUE` | revive, staticcheck style checks, available modernizations | 2 only with `--fail-on-warn` |
 
 Everything from `WARNING` up has to be dealt with, so everything from

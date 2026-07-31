@@ -24,6 +24,12 @@ goaudit help                 # full built-in reference
 If `<dir>` has no `go.mod`, or `--recursive` is passed, every Go project
 underneath it is discovered and audited separately.
 
+Vendored projects and workspace-vendored monorepos (a `go.work` with a
+shared `vendor/` directory) are audited from `vendor/modules.txt`, with
+no network needed for the module list. In such a monorepo, a dependency
+finding repeats under every member project, because the vendor directory
+is shared: fixing it once fixes them all.
+
 Check that `goaudit` is on `PATH` before relying on it. If it is
 missing:
 
@@ -53,7 +59,7 @@ Findings come at four levels:
 |---|---|---|
 | `FLAGGED` | known-malicious package (feed or local IOC match) | 1, always |
 | `SECURITY` | gosec, govulncheck, or a gained high-risk capability | 2, always |
-| `WARNING` | typosquat heuristic; vet, staticcheck's `SA` checks, errcheck, gofmt, failing tests, capability report | 2, always |
+| `WARNING` | typosquat heuristic; vet, staticcheck's `SA` checks, errcheck, gofmt, failing tests, capability report, untidy go.mod | 2, always |
 | `ISSUE` | revive, staticcheck's `S1`/`ST1`/`QF`/`U` checks, available modernizations from `go fix` | 2 only with `--fail-on-warn` |
 
 A `WARNING` is a defect with a definite fix, and fails the run on its
@@ -92,9 +98,9 @@ terminal.
 ## Environment variables
 
 - `GOAUDIT_SKIP_CHECKS` skips checks by name, comma-separated
-  (`capslock`, or `test,capslock`). Any other non-empty value skips the
-  whole check suite. Use this when a run is too slow, especially the
-  first capslock analysis of a large tree.
+  (`tidy`, `capslock`, or `test,capslock`). Any other non-empty value
+  skips the whole check suite. Use this when a run is too slow,
+  especially the first capslock analysis of a large tree.
 - `GOAUDIT_FEED_URL` and `GOAUDIT_OSV_FEED_URL` override the threat feed
   endpoints; the value `off` disables that feed.
 - `GOAUDIT_DATA_DIR` relocates the shared data directory (Linux default
@@ -149,5 +155,6 @@ malicious packages, security findings, and warnings fail.
 
 goaudit does not modify the tree it scans, apart from writing
 `goaudit-report.json` and the capslock baseline. Formatting is checked
-with `gofmt -l` and modernizations with `go fix -diff`; neither is ever
-applied. Fixing what it reports is a separate, deliberate step.
+with `gofmt -l`, modernizations with `go fix -diff`, and go.mod
+tidiness with `go mod tidy -diff`; none of them is ever applied. Fixing
+what it reports is a separate, deliberate step.

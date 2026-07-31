@@ -390,6 +390,39 @@ func TestRunMultiProject(t *testing.T) {
 	}
 }
 
+// TestRunWorkspaceVendoredMonorepo covers the monorepo layout where a
+// go.work plus a workspace vendor directory makes `go list -m all`
+// impossible: every member must still be audited, from the workspace's
+// vendor/modules.txt.
+func TestRunWorkspaceVendoredMonorepo(t *testing.T) {
+	fakeFeed(t, emptyFeed)
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "go.work"), "go 1.23\n\nuse (\n\t./svc-a\n\t./svc-b\n)\n")
+	writeFile(t, filepath.Join(root, "vendor", "modules.txt"),
+		"## workspace\n# github.com/evil/badpkg v1.0.0\n## explicit; go1.23\ngithub.com/evil/badpkg\n"+
+			"# example.org/harmless/dep v1.2.0\n## explicit; go1.23\nexample.org/harmless/dep\n")
+	writeFile(t, filepath.Join(root, "svc-a", "go.mod"), "module example.test/svc-a\n\ngo 1.23\n")
+	writeFile(t, filepath.Join(root, "svc-b", "go.mod"), "module example.test/svc-b\n\ngo 1.23\n")
+	writeFile(t, filepath.Join(root, ".goaudit-ioc.json"),
+		`{"entries":[{"module":"github.com/evil/badpkg","campaign":"PolinRider"}]}`)
+
+	var out, errOut bytes.Buffer
+	code := run([]string{"--path", root}, &out, &errOut)
+	if code != exitFlagged {
+		t.Fatalf("exit = %d, want %d\nstdout: %s\nstderr: %s", code, exitFlagged, out.String(), errOut.String())
+	}
+	for _, want := range []string{
+		"── svc-a (",
+		"── svc-b (",
+		"FLAGGED  github.com/evil/badpkg@v1.0.0",
+		"overall: 2 projects, 4 modules checked | 2 flagged",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("output missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
 func TestRunMultiOnlyBroken(t *testing.T) {
 	fakeFeed(t, emptyFeed)
 	root := t.TempDir()
