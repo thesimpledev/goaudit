@@ -71,8 +71,11 @@ go install github.com/google/capslock/cmd/capslock@latest
 
 `skills/goaudit/SKILL.md` is a [Claude Code](https://claude.com/claude-code)
 skill covering how to run goaudit and how to read what it reports.
-Copy the folder into your skills directory and Claude picks it up on
-its own when a Go project needs auditing:
+It runs in a forked subagent on the Opus model, so the audit run and
+the raw report stay out of the main conversation and only a compact
+summary of findings comes back. Copy the folder into your skills
+directory and Claude picks it up on its own when a Go project needs
+auditing:
 
 ```sh
 cp -r skills/goaudit ~/.claude/skills/          # available everywhere

@@ -1,9 +1,36 @@
 ---
 name: goaudit
 description: Audit Go projects for malicious packages, typosquats, known vulnerabilities, capability changes, and code quality using the goaudit CLI. Use when asked to audit, security-scan, vet, or check the health of a Go project or a directory of Go projects; before committing, releasing, or adding a new Go dependency; when investigating whether a dependency is malicious or a typosquat; or when a goaudit run needs to be interpreted, gated in CI, or its baselines updated.
+context: fork
+agent: general-purpose
+model: opus
+arguments: [path]
+allowed-tools: Bash(goaudit *) Bash(go install *) Read Grep Glob
 ---
 
 # goaudit
+
+## When invoked
+
+This skill runs in a forked subagent on a cheaper model, so the run and
+the raw report stay out of the main conversation. The subagent does not
+see the conversation; everything it needs is here.
+
+1. Run `goaudit --path $path` (or `goaudit` in the current directory when
+   no path was given). Do not add `--cli`; the JSON is read instead.
+2. Read `goaudit-report.json` from the scanned directory. Parse the JSON,
+   not the text.
+3. Return a compact report and nothing else:
+   - the `result:` line and the exit code
+   - counts per level: FLAGGED, SECURITY, WARNING, ISSUE
+   - every FLAGGED, SECURITY, and WARNING entry in full: level, tool,
+     `file:line`, message
+   - ISSUE entries grouped by rule with a count, plus the `file:line` of
+     each occurrence when a rule has five or fewer
+   - any ERROR section (project that could not be scanned) verbatim
+4. Do not fix, format, suppress, or edit anything. Do not run
+   `--update-baselines`. Do not commit. Fixing is the main session's
+   deliberate next step, per the levels below.
 
 `goaudit` audits Go projects for malicious packages, typosquats, known
 vulnerabilities, dependency capability changes, and code quality. It
